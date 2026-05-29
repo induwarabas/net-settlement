@@ -50,13 +50,18 @@ type Result struct {
 	Trades       []*TradeResult
 }
 
+type Results struct {
+	Batches  []*Result
+	Deferred []Trade
+}
+
 type LedgerEntry interface {
 	Member() string
 	Asset() string
 	Balance() decimal.Decimal
 }
 
-func GenerateInstructions(trades []Trade, ledger []LedgerEntry) *Result {
+func GenerateInstructions(trades []Trade, ledger []LedgerEntry) Results {
 	eng := newEngine()
 	eng.init(trades, ledger)
 	return eng.run()

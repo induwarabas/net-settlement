@@ -32,6 +32,7 @@ func main() {
 
 	instructions := settlement.GenerateInstructions(trds, leds)
 
-	output.WriteInstructions(fmt.Sprintf("%s/settlement-instructions.csv", path), instructions.Instructions)
-	output.WriteTradeDetail(fmt.Sprintf("%s/trade-settlements.csv", path), instructions.Trades)
+	output.WriteInstructions(fmt.Sprintf("%s/settlement-instructions.csv", path), instructions)
+	output.WriteTradeDetail(fmt.Sprintf("%s/trade-settlements.csv", path), instructions)
+
 }

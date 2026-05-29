@@ -10,14 +10,26 @@ import (
 	"time"
 )
 
-func WriteInstructions(path string, instructions []*settlement.Instruction) {
-	// Sort for deterministic output: Member, Asset
-	sort.Slice(instructions, func(i, j int) bool {
-		a, b := instructions[i], instructions[j]
-		if a.Member != b.Member {
-			return a.Member < b.Member
+func WriteInstructions(path string, results settlement.Results) {
+	type entry struct {
+		batch int
+		inst  *settlement.Instruction
+	}
+	var entries []entry
+	for i, batch := range results.Batches {
+		for _, inst := range batch.Instructions {
+			entries = append(entries, entry{i + 1, inst})
 		}
-		return a.Asset < b.Asset
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.batch != b.batch {
+			return a.batch < b.batch
+		}
+		if a.inst.Member != b.inst.Member {
+			return a.inst.Member < b.inst.Member
+		}
+		return a.inst.Asset < b.inst.Asset
 	})
 
 	f, err := os.Create(path)
@@ -27,10 +39,12 @@ func WriteInstructions(path string, instructions []*settlement.Instruction) {
 	defer f.Close()
 
 	w := csv.NewWriter(f)
-	w.Write([]string{"Member", "Tier", "Asset", "OpeningBalance", "NetAmount", "Direction", "ClosingBalance"})
+	w.Write([]string{"Batch", "Member", "Tier", "Asset", "OpeningBalance", "NetAmount", "Direction", "ClosingBalance"})
 
-	for _, inst := range instructions {
+	for _, e := range entries {
+		inst := e.inst
 		w.Write([]string{
+			fmt.Sprintf("%d", e.batch),
 			inst.Member,
 			"",
 			inst.Asset,
@@ -43,7 +57,7 @@ func WriteInstructions(path string, instructions []*settlement.Instruction) {
 	w.Flush()
 }
 
-func WriteTradeDetail(path string, results []*settlement.TradeResult) {
+func WriteTradeDetail(path string, results settlement.Results) {
 	f, err := os.Create(path)
 	if err != nil {
 		panic(fmt.Sprintf("create %s: %v", path, err))
@@ -52,28 +66,53 @@ func WriteTradeDetail(path string, results []*settlement.TradeResult) {
 
 	w := csv.NewWriter(f)
 	w.Write([]string{
-		"TradeId", "ExecutionTimestamp", "Pair", "Base", "Quote",
+		"Batch", "TradeId", "ExecutionTimestamp", "Pair", "Base", "Quote",
 		"OriginalQuantity", "OriginalQuoteValue",
 		"SettledQuantity", "SettledQuoteValue",
 		"DeferredQuantity", "DeferredQuoteValue",
 		"Status",
 	})
 
-	for _, r := range results {
-		t := r.Trade.(*loader.Trade)
+	for i, batch := range results.Batches {
+		batchLabel := fmt.Sprintf("%d", i+1)
+		for _, r := range batch.Trades {
+			t := r.Trade.(*loader.Trade)
+			w.Write([]string{
+				batchLabel,
+				t.TradeID(),
+				time.Unix(0, t.ExecTime()).UTC().Format("2006-01-02T15:04:05.999Z07:00"),
+				t.Pair(),
+				t.BaseAsset(),
+				t.QuoteAsset(),
+				t.Quantity().String(),
+				t.QuoteValue().String(),
+				r.SettledQuantity.String(),
+				r.SettledQuoteQuantity.String(),
+				r.DeferredQuantity.String(),
+				r.DeferredQuoteQuantity.String(),
+				string(r.Status),
+			})
+		}
+	}
+
+	for _, trade := range results.Deferred {
+		t := trade.(*loader.Trade)
+		qty := t.Quantity()
+		quoteVal := t.QuoteValue()
 		w.Write([]string{
+			"",
 			t.TradeID(),
 			time.Unix(0, t.ExecTime()).UTC().Format("2006-01-02T15:04:05.999Z07:00"),
 			t.Pair(),
 			t.BaseAsset(),
 			t.QuoteAsset(),
-			t.Quantity().String(),
-			t.QuoteValue().String(),
-			r.SettledQuantity.String(),
-			r.SettledQuoteQuantity.String(),
-			r.DeferredQuantity.String(),
-			r.DeferredQuoteQuantity.String(),
-			string(r.Status),
+			qty.String(),
+			quoteVal.String(),
+			"0",
+			"0",
+			qty.String(),
+			quoteVal.String(),
+			string(settlement.TradeResultStatusDeferred),
 		})
 	}
 	w.Flush()

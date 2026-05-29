@@ -260,7 +260,7 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	m.netting[trade.Seller][trade.QuoteAsset].Sub(m.netting[trade.Seller][trade.QuoteAsset], quoteQty)
 }
 
-func (m *engine) run() *Result {
+func (m *engine) run() Results {
 	startTime := time.Now().UnixNano()
 	m.calculateNetting()
 
@@ -330,10 +330,12 @@ func (m *engine) run() *Result {
 
 	slog.Info("Settlement instruction generation complete.", "instructions", len(instructions), "fullySettled", fullCount, "partiallySettled", partialCount, "deferred", deferredCount)
 
-	return &Result{
+	result := &Result{
 		Instructions: instructions,
 		Trades:       trades,
 	}
+	batches := splitBatches(result)
+	return batches
 }
 
 func (m *engine) printNettingTable(index int) error {
