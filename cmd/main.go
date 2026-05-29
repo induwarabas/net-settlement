@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	loader2 "settlement/cmd/loader"
+	"settlement/cmd/loader"
 	"settlement/cmd/output"
 	"settlement/internal/settlement"
 )
@@ -17,8 +17,8 @@ func main() {
 
 	slog.Info("Using data folder.", "path", path)
 
-	led := loader2.LoadLedger(fmt.Sprintf("%s/ledger.csv", path))
-	trd := loader2.LoadTrades(fmt.Sprintf("%s/trades.csv", path))
+	led := loader.LoadLedger(fmt.Sprintf("%s/ledger.csv", path))
+	trd := loader.LoadTrades(fmt.Sprintf("%s/trades.csv", path))
 
 	trds := make([]settlement.Trade, len(trd))
 	for i, trade := range trd {
