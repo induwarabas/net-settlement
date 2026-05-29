@@ -1,0 +1,371 @@
+package settlement
+
+import (
+	"encoding/csv"
+	"fmt"
+	"log/slog"
+	"math/big"
+	"os"
+	"sort"
+	"time"
+)
+
+type trade struct {
+	TradeId           int
+	Buyer             int
+	Seller            int
+	BaseAsset         int
+	QuoteAsset        int
+	BaseQuantity      *big.Int
+	Price             *big.Int
+	QuoteQuantity     *big.Int
+	RemainingBaseQty  *big.Int
+	RemainingQuoteQty *big.Int
+}
+
+type assetLiability struct {
+	Start  int
+	Trades []*trade
+}
+
+type location struct {
+	member int
+	asset  int
+}
+
+func newLocation(member int, asset int) *location {
+	return &location{
+		member: member,
+		asset:  asset,
+	}
+}
+
+type engine struct {
+	ledger            [][]*big.Int
+	netting           [][]*big.Int
+	trades            []*trade
+	tradeIndex        map[string]int
+	assetIndex        map[string]int
+	memberIndex       map[string]int
+	assets            []string
+	members           []string
+	assetLiability    [][]*assetLiability
+	negativeLocations []*location
+	originalTrades    []Trade
+}
+
+func newEngine() *engine {
+	m := &engine{
+		ledger:         make([][]*big.Int, 0),
+		netting:        make([][]*big.Int, 0),
+		trades:         make([]*trade, 0),
+		tradeIndex:     make(map[string]int),
+		assetIndex:     make(map[string]int),
+		memberIndex:    make(map[string]int),
+		originalTrades: make([]Trade, 0),
+	}
+	return m
+}
+
+func (m *engine) memberId(member string) int {
+	id, ok := m.memberIndex[member]
+	if !ok {
+		id = len(m.memberIndex)
+		m.memberIndex[member] = id
+	}
+	return id
+}
+
+func (m *engine) assetId(asset string) int {
+	id, ok := m.assetIndex[asset]
+	if !ok {
+		id = len(m.assetIndex)
+		m.assetIndex[asset] = id
+	}
+	return id
+}
+
+func (m *engine) init(trades []Trade, ledger []LedgerEntry) {
+	slog.Info("Initializing settlement engine")
+	sort.SliceStable(trades, func(i, j int) bool {
+		return trades[i].ExecTime() < trades[j].ExecTime()
+	})
+
+	for i, trd := range trades {
+		m.originalTrades = append(m.originalTrades, trd)
+
+		quantity := fromDecimal(trd.Quantity())
+		price := fromDecimal(trd.Price())
+		quoteQty := multiply(quantity, price)
+		m.trades = append(m.trades, &trade{
+			TradeId:           i,
+			Buyer:             m.memberId(trd.Buyer()),
+			Seller:            m.memberId(trd.Seller()),
+			BaseAsset:         m.assetId(trd.BaseAsset()),
+			QuoteAsset:        m.assetId(trd.QuoteAsset()),
+			BaseQuantity:      new(big.Int).Set(quantity),
+			Price:             new(big.Int).Set(price),
+			QuoteQuantity:     new(big.Int).Set(quoteQty),
+			RemainingBaseQty:  new(big.Int).Set(quantity),
+			RemainingQuoteQty: new(big.Int).Set(quoteQty),
+		})
+	}
+
+	m.ledger = make([][]*big.Int, len(m.memberIndex))
+	m.netting = make([][]*big.Int, len(m.memberIndex))
+
+	for i := 0; i < len(m.memberIndex); i++ {
+		m.ledger[i] = make([]*big.Int, len(m.assetIndex))
+		m.netting[i] = make([]*big.Int, len(m.assetIndex))
+		for j := 0; j < len(m.assetIndex); j++ {
+			m.ledger[i][j] = new(big.Int)
+			m.netting[i][j] = new(big.Int)
+		}
+	}
+
+	for _, entry := range ledger {
+		memberId, ok := m.memberIndex[entry.Member()]
+		if !ok {
+			continue
+		}
+		assetId, k := m.assetIndex[entry.Asset()]
+		if !k {
+			continue
+		}
+		balance := fromDecimal(entry.Balance())
+		m.ledger[memberId][assetId].Set(balance)
+		m.netting[memberId][assetId].Set(balance)
+	}
+	m.members = make([]string, len(m.memberIndex))
+	for member, id := range m.memberIndex {
+		m.members[id] = member
+	}
+
+	m.assets = make([]string, len(m.assetIndex))
+	for asset, id := range m.assetIndex {
+		m.assets[id] = asset
+	}
+
+	m.assetLiability = make([][]*assetLiability, len(m.memberIndex))
+
+	for i := 0; i < len(m.memberIndex); i++ {
+		m.assetLiability[i] = make([]*assetLiability, len(m.assetIndex))
+		for j := 0; j < len(m.assetIndex); j++ {
+			m.assetLiability[i][j] = &assetLiability{
+				Start:  0,
+				Trades: make([]*trade, 0),
+			}
+		}
+	}
+
+	for _, trd := range m.trades {
+		m.assetLiability[trd.Buyer][trd.QuoteAsset].Trades = append(m.assetLiability[trd.Buyer][trd.QuoteAsset].Trades, trd)
+		m.assetLiability[trd.Seller][trd.BaseAsset].Trades = append(m.assetLiability[trd.Seller][trd.BaseAsset].Trades, trd)
+	}
+
+	for _, liabilities := range m.assetLiability {
+		for _, liability := range liabilities {
+			liability.Start = len(liability.Trades) - 1
+		}
+	}
+	slog.Info("Settlement engine initialized.", "trades", len(m.trades), "members", len(m.members), "assets", len(m.assets))
+}
+
+func (m *engine) calculateNetting() {
+	for _, trd := range m.trades {
+		m.netting[trd.Buyer][trd.BaseAsset].Add(m.netting[trd.Buyer][trd.BaseAsset], trd.BaseQuantity)
+		m.netting[trd.Buyer][trd.QuoteAsset].Sub(m.netting[trd.Buyer][trd.QuoteAsset], trd.QuoteQuantity)
+
+		m.netting[trd.Seller][trd.BaseAsset].Sub(m.netting[trd.Seller][trd.BaseAsset], trd.BaseQuantity)
+		m.netting[trd.Seller][trd.QuoteAsset].Add(m.netting[trd.Seller][trd.QuoteAsset], trd.QuoteQuantity)
+	}
+}
+
+func (m *engine) runIteration() bool {
+	m.negativeLocations = make([]*location, 0)
+	for i, assets := range m.netting {
+		for j, value := range assets {
+			if value.Sign() < 0 {
+				m.negativeLocations = append(m.negativeLocations, newLocation(i, j))
+			}
+		}
+	}
+
+	if len(m.negativeLocations) == 0 {
+		return false
+	}
+
+	for _, loc := range m.negativeLocations {
+		remaining := new(big.Int).Neg(m.netting[loc.member][loc.asset])
+		for {
+			if remaining.Sign() <= 0 {
+				break
+			}
+
+			liability := m.assetLiability[loc.member][loc.asset]
+			if liability.Start < 0 {
+				fmt.Println("Can't be")
+			}
+			trd := liability.Trades[liability.Start]
+			if trd.RemainingBaseQty.Sign() == 0 {
+				liability.Start -= 1
+				continue
+			}
+
+			if trd.BaseAsset == loc.asset {
+				if remaining.Cmp(trd.RemainingBaseQty) > 0 {
+					qtyToReverse := new(big.Int).Set(trd.RemainingBaseQty)
+					m.reverseTrade(trd, qtyToReverse, true)
+					remaining.Sub(remaining, qtyToReverse)
+					liability.Start -= 1
+				} else {
+					m.reverseTrade(trd, new(big.Int).Set(remaining), true)
+					remaining.SetInt64(0)
+				}
+			} else if trd.QuoteAsset == loc.asset {
+				if remaining.Cmp(trd.RemainingQuoteQty) > 0 {
+					qtyToReverse := new(big.Int).Set(trd.RemainingQuoteQty)
+					m.reverseTrade(trd, qtyToReverse, false)
+					remaining.Sub(remaining, qtyToReverse)
+					liability.Start -= 1
+				} else {
+					m.reverseTrade(trd, new(big.Int).Set(remaining), false)
+					remaining.SetInt64(0)
+				}
+			}
+		}
+	}
+	return true
+}
+
+func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
+	if trade.BaseQuantity.Sign() == 0 || trade.QuoteQuantity.Sign() == 0 {
+		return
+	}
+	var baseQty, quoteQty *big.Int
+	if base {
+		baseQty = qty
+		quoteQty = multiplyAndDivide(qty, trade.QuoteQuantity, trade.BaseQuantity)
+	} else {
+		quoteQty = qty
+		baseQty = multiplyAndDivide(qty, trade.BaseQuantity, trade.QuoteQuantity)
+	}
+
+	trade.RemainingBaseQty.Sub(trade.RemainingBaseQty, baseQty)
+	trade.RemainingQuoteQty.Sub(trade.RemainingQuoteQty, quoteQty)
+
+	m.netting[trade.Buyer][trade.BaseAsset].Sub(m.netting[trade.Buyer][trade.BaseAsset], baseQty)
+	m.netting[trade.Seller][trade.BaseAsset].Add(m.netting[trade.Seller][trade.BaseAsset], baseQty)
+	m.netting[trade.Buyer][trade.QuoteAsset].Add(m.netting[trade.Buyer][trade.QuoteAsset], quoteQty)
+	m.netting[trade.Seller][trade.QuoteAsset].Sub(m.netting[trade.Seller][trade.QuoteAsset], quoteQty)
+}
+
+func (m *engine) run() *Result {
+	startTime := time.Now().UnixNano()
+	m.calculateNetting()
+
+	i := 1
+	for {
+		ok := m.runIteration()
+		i += 1
+		if !ok {
+			break
+		}
+	}
+
+	endTime := time.Now().UnixNano()
+	slog.Info("settlement instruction calculation complete.", "iterations", i, "time(ns)", endTime-startTime)
+
+	trades := make([]*TradeResult, 0)
+	fullCount := 0
+	partialCount := 0
+	deferredCount := 0
+	for j, trd := range m.trades {
+		originalTrade := m.originalTrades[j]
+		status := TradeResultStatusPartial
+		if trd.RemainingBaseQty.Sign() == 0 {
+			status = TradeResultStatusDeferred
+			deferredCount += 1
+		} else if trd.RemainingBaseQty.Cmp(trd.BaseQuantity) == 0 {
+			status = TradeResultStatusFull
+			fullCount += 1
+		} else {
+			partialCount += 1
+		}
+		trdResult := &TradeResult{
+			Trade:                 originalTrade,
+			Status:                status,
+			DeferredQuantity:      toDecimal(new(big.Int).Sub(trd.BaseQuantity, trd.RemainingBaseQty)),
+			DeferredQuoteQuantity: toDecimal(new(big.Int).Sub(trd.QuoteQuantity, trd.RemainingQuoteQty)),
+			SettledQuantity:       toDecimal(trd.RemainingBaseQty),
+			SettledQuoteQuantity:  toDecimal(trd.RemainingQuoteQty),
+		}
+		trades = append(trades, trdResult)
+	}
+
+	instructions := make([]*Instruction, 0)
+
+	for member := 0; member < len(m.members); member++ {
+		for asset := 0; asset < len(m.assets); asset++ {
+			diff := new(big.Int).Sub(m.netting[member][asset], m.ledger[member][asset])
+			if diff.Sign() == 0 {
+				continue
+			}
+
+			direction := InstructionDirectionCredit
+			if diff.Sign() < 0 {
+				direction = InstructionDirectionDebit
+			}
+
+			instructions = append(instructions, &Instruction{
+				Member:         m.members[member],
+				Asset:          m.assets[asset],
+				OpeningBalance: toDecimal(m.ledger[member][asset]),
+				NetAmount:      toDecimal(new(big.Int).Abs(diff)),
+				Direction:      direction,
+				ClosingBalance: toDecimal(m.netting[member][asset]),
+			})
+		}
+	}
+
+	slog.Info("Settlement instruction generation complete.", "instructions", len(instructions), "fullySettled", fullCount, "partiallySettled", partialCount, "deferred", deferredCount)
+
+	return &Result{
+		Instructions: instructions,
+		Trades:       trades,
+	}
+}
+
+func (m *engine) printNettingTable(index int) error {
+	if err := os.MkdirAll("data", 0755); err != nil {
+		return err
+	}
+
+	f, err := os.Create(fmt.Sprintf("data/netting-%d-x.csv", index))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	defer w.Flush()
+
+	header := append([]string{"member"}, m.assets...)
+	if err := w.Write(header); err != nil {
+		return err
+	}
+
+	for memberId, assets := range m.netting {
+		row := make([]string, 1+len(assets))
+		row[0] = m.members[memberId]
+		for assetId, amount := range assets {
+			row[1+assetId] = toDecimal(amount).String()
+		}
+		if err := w.Write(row); err != nil {
+			return err
+		}
+		w.Flush()
+	}
+
+	return w.Error()
+}
