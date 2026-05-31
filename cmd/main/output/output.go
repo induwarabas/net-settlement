@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"settlement/cmd/main/loader"
-	"settlement/internal/settlement"
+	"settlement/pkg/settlement"
 	"sort"
 	"time"
 )

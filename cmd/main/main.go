@@ -6,7 +6,7 @@ import (
 	"os"
 	loader "settlement/cmd/main/loader"
 	"settlement/cmd/main/output"
-	"settlement/internal/settlement"
+	"settlement/pkg/settlement"
 )
 
 func main() {
