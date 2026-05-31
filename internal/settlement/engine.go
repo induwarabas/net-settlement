@@ -8,6 +8,8 @@ import (
 	"os"
 	"sort"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 type trade struct {
@@ -52,9 +54,10 @@ type engine struct {
 	assetLiability    [][]*assetLiability
 	negativeLocations []*location
 	originalTrades    []Trade
+	strictFifo        bool
 }
 
-func newEngine() *engine {
+func newEngine(strictFifo bool) *engine {
 	m := &engine{
 		ledger:         make([][]*big.Int, 0),
 		netting:        make([][]*big.Int, 0),
@@ -63,6 +66,7 @@ func newEngine() *engine {
 		assetIndex:     make(map[string]int),
 		memberIndex:    make(map[string]int),
 		originalTrades: make([]Trade, 0),
+		strictFifo:     strictFifo,
 	}
 	return m
 }
@@ -277,20 +281,14 @@ func (m *engine) run() Results {
 	slog.Info("settlement instruction calculation complete.", "iterations", i, "time(ns)", endTime-startTime)
 
 	trades := make([]*TradeResult, 0)
-	fullCount := 0
-	partialCount := 0
-	deferredCount := 0
+
 	for j, trd := range m.trades {
 		originalTrade := m.originalTrades[j]
 		status := TradeResultStatusPartial
 		if trd.RemainingBaseQty.Sign() == 0 {
 			status = TradeResultStatusDeferred
-			deferredCount += 1
 		} else if trd.RemainingBaseQty.Cmp(trd.BaseQuantity) == 0 {
 			status = TradeResultStatusFull
-			fullCount += 1
-		} else {
-			partialCount += 1
 		}
 		trdResult := &TradeResult{
 			Trade:                 originalTrade,
@@ -301,6 +299,10 @@ func (m *engine) run() Results {
 			SettledQuoteQuantity:  toDecimal(trd.RemainingQuoteQty),
 		}
 		trades = append(trades, trdResult)
+	}
+
+	if m.strictFifo {
+		m.deferFollowingTradesIfNotFullySettled(trades)
 	}
 
 	instructions := make([]*Instruction, 0)
@@ -328,6 +330,19 @@ func (m *engine) run() Results {
 		}
 	}
 
+	fullCount := 0
+	partialCount := 0
+	deferredCount := 0
+	for _, trd := range trades {
+		if trd.Status == TradeResultStatusFull {
+			fullCount += 1
+		} else if trd.Status == TradeResultStatusPartial {
+			partialCount += 1
+		} else {
+			deferredCount += 1
+		}
+	}
+
 	slog.Info("Settlement instruction generation complete.", "instructions", len(instructions), "fullySettled", fullCount, "partiallySettled", partialCount, "deferred", deferredCount)
 
 	result := &Result{
@@ -336,6 +351,47 @@ func (m *engine) run() Results {
 	}
 	batches := splitBatches(result)
 	return batches
+}
+
+func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
+	for i := 0; i < len(m.memberIndex); i++ {
+		for j := 0; j < len(m.assetIndex); j++ {
+			m.netting[i][j] = new(big.Int).Set(m.ledger[i][j])
+		}
+	}
+
+	deferred := make(map[string]bool)
+
+	for _, trd := range trades {
+		buyerKey := fmt.Sprintf("%s-%s", trd.Trade.Buyer(), trd.Trade.QuoteAsset())
+		sellerKey := fmt.Sprintf("%s-%s", trd.Trade.Seller(), trd.Trade.BaseAsset())
+		if deferred[buyerKey] || deferred[sellerKey] {
+			trd.Status = TradeResultStatusDeferred
+			trd.SettledQuoteQuantity = decimal.Zero
+			trd.SettledQuantity = decimal.Zero
+			trd.DeferredQuantity = trd.Trade.Quantity()
+			trd.DeferredQuoteQuantity = trd.Trade.Price().Mul(trd.Trade.Quantity())
+			deferred[buyerKey] = true
+			deferred[sellerKey] = true
+			continue
+		}
+		if trd.Status != TradeResultStatusFull {
+			deferred[buyerKey] = true
+			deferred[sellerKey] = true
+		}
+
+		if trd.Status == TradeResultStatusDeferred {
+			continue
+		}
+		buyerId := m.memberIndex[trd.Trade.Buyer()]
+		sellerId := m.memberIndex[trd.Trade.Seller()]
+		baseAssetId := m.assetIndex[trd.Trade.BaseAsset()]
+		quoteAssetId := m.assetIndex[trd.Trade.QuoteAsset()]
+		m.netting[buyerId][baseAssetId] = new(big.Int).Add(m.netting[buyerId][baseAssetId], fromDecimal(trd.SettledQuantity))
+		m.netting[sellerId][quoteAssetId] = new(big.Int).Add(m.netting[sellerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
+		m.netting[buyerId][quoteAssetId] = new(big.Int).Sub(m.netting[buyerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
+		m.netting[sellerId][baseAssetId] = new(big.Int).Sub(m.netting[sellerId][baseAssetId], fromDecimal(trd.SettledQuantity))
+	}
 }
 
 func (m *engine) printNettingTable(index int) error {

@@ -4,7 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
-	"settlement/cmd/loader"
+	"settlement/cmd/main/loader"
 	"settlement/internal/settlement"
 	"sort"
 	"time"
@@ -68,6 +68,7 @@ func WriteTradeDetail(path string, results settlement.Results) {
 	w.Write([]string{
 		"Batch", "TradeId", "ExecutionTimestamp", "Pair", "Base", "Quote",
 		"OriginalQuantity", "OriginalQuoteValue",
+		"Buyer", "Seller",
 		"SettledQuantity", "SettledQuoteValue",
 		"DeferredQuantity", "DeferredQuoteValue",
 		"Status",
@@ -86,6 +87,8 @@ func WriteTradeDetail(path string, results settlement.Results) {
 				t.QuoteAsset(),
 				t.Quantity().String(),
 				t.QuoteValue().String(),
+				t.Buyer(),
+				t.Seller(),
 				r.SettledQuantity.String(),
 				r.SettledQuoteQuantity.String(),
 				r.DeferredQuantity.String(),
@@ -108,6 +111,8 @@ func WriteTradeDetail(path string, results settlement.Results) {
 			t.QuoteAsset(),
 			qty.String(),
 			quoteVal.String(),
+			t.Buyer(),
+			t.Seller(),
 			"0",
 			"0",
 			qty.String(),

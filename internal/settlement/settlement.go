@@ -3,6 +3,7 @@ package settlement
 import "github.com/shopspring/decimal"
 
 type Trade interface {
+	TradeID() string
 	ExecTime() int64
 	Buyer() string
 	Seller() string
@@ -61,8 +62,8 @@ type LedgerEntry interface {
 	Balance() decimal.Decimal
 }
 
-func GenerateInstructions(trades []Trade, ledger []LedgerEntry) Results {
-	eng := newEngine()
+func GenerateInstructions(trades []Trade, ledger []LedgerEntry, strictFifo bool) Results {
+	eng := newEngine(strictFifo)
 	eng.init(trades, ledger)
 	return eng.run()
 }

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"settlement/cmd/loader"
-	"settlement/cmd/output"
+	loader "settlement/cmd/main/loader"
+	"settlement/cmd/main/output"
 	"settlement/internal/settlement"
 )
 
@@ -30,7 +30,7 @@ func main() {
 		leds[i] = ledgerEntry
 	}
 
-	instructions := settlement.GenerateInstructions(trds, leds)
+	instructions := settlement.GenerateInstructions(trds, leds, true)
 
 	output.WriteInstructions(fmt.Sprintf("%s/settlement-instructions.csv", path), instructions)
 	output.WriteTradeDetail(fmt.Sprintf("%s/trade-settlements.csv", path), instructions)
