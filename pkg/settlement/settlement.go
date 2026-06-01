@@ -36,7 +36,6 @@ const InstructionDirectionDebit = InstructionDirection("DEBIT")
 // Add assets to ledger
 const InstructionDirectionCredit = InstructionDirection("CREDIT")
 
-// "Member", "Tier", "Asset", "OpeningBalance", "NetAmount", "Direction", "ClosingBalance"
 type Instruction struct {
 	Member         string
 	Asset          string

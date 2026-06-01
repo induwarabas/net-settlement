@@ -302,7 +302,11 @@ func (m *engine) run() Results {
 	}
 
 	if m.strictFifo {
-		m.deferFollowingTradesIfNotFullySettled(trades)
+		for {
+			if !m.deferFollowingTradesIfNotFullySettled(trades) {
+				break
+			}
+		}
 	}
 
 	instructions := make([]*Instruction, 0)
@@ -353,12 +357,14 @@ func (m *engine) run() Results {
 	return batches
 }
 
-func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
+func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) bool {
 	for i := 0; i < len(m.memberIndex); i++ {
 		for j := 0; j < len(m.assetIndex); j++ {
 			m.netting[i][j] = new(big.Int).Set(m.ledger[i][j])
 		}
 	}
+
+	modified := false
 
 	deferred := make(map[string]bool)
 
@@ -366,6 +372,9 @@ func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
 		buyerKey := fmt.Sprintf("%s-%s", trd.Trade.Buyer(), trd.Trade.QuoteAsset())
 		sellerKey := fmt.Sprintf("%s-%s", trd.Trade.Seller(), trd.Trade.BaseAsset())
 		if deferred[buyerKey] || deferred[sellerKey] {
+			if trd.Status != TradeResultStatusDeferred {
+				modified = true
+			}
 			trd.Status = TradeResultStatusDeferred
 			trd.SettledQuoteQuantity = decimal.Zero
 			trd.SettledQuantity = decimal.Zero
@@ -392,6 +401,7 @@ func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
 		m.netting[buyerId][quoteAssetId] = new(big.Int).Sub(m.netting[buyerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
 		m.netting[sellerId][baseAssetId] = new(big.Int).Sub(m.netting[sellerId][baseAssetId], fromDecimal(trd.SettledQuantity))
 	}
+	return modified
 }
 
 func (m *engine) printNettingTable(index int) error {
