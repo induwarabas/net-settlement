@@ -1,52 +1,104 @@
 package settlement
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
-type unionFind struct {
-	parent map[string]string
-	rank   map[string]int
+//type unionFind struct {
+//	parent map[string]string
+//	rank   map[string]int
+//}
+//
+//func newUnionFind() *unionFind {
+//	return &unionFind{
+//		parent: make(map[string]string),
+//		rank:   make(map[string]int),
+//	}
+//}
+//
+//// ensure adds x to the union-find structure if it is not already present.
+//func (uf *unionFind) ensure(x string) {
+//	if _, ok := uf.parent[x]; !ok {
+//		uf.parent[x] = x
+//		uf.rank[x] = 0
+//	}
+//}
+//
+//// find returns the root representative of x's component, applying path compression.
+//func (uf *unionFind) find(x string) string {
+//	uf.ensure(x)
+//	if uf.parent[x] != x {
+//		uf.parent[x] = uf.find(uf.parent[x])
+//	}
+//	return uf.parent[x]
+//}
+//
+//// union merges the components containing a and b using union-by-rank.
+//func (uf *unionFind) union(a, b string) {
+//	ra, rb := uf.find(a), uf.find(b)
+//	if ra == rb {
+//		return
+//	}
+//	if uf.rank[ra] < uf.rank[rb] {
+//		ra, rb = rb, ra
+//	}
+//	uf.parent[rb] = ra
+//	if uf.rank[ra] == uf.rank[rb] {
+//		uf.rank[ra]++
+//	}
+//}
+
+type batchBuilder struct {
+	parents  map[string]string
+	children map[string][]string
 }
 
-func newUnionFind() *unionFind {
-	return &unionFind{
-		parent: make(map[string]string),
-		rank:   make(map[string]int),
+func newBatchBuilder() *batchBuilder {
+	return &batchBuilder{
+		parents:  make(map[string]string),
+		children: make(map[string][]string),
 	}
 }
 
-func (uf *unionFind) ensure(x string) {
-	if _, ok := uf.parent[x]; !ok {
-		uf.parent[x] = x
-		uf.rank[x] = 0
+func (m *batchBuilder) ensure(x string) {
+	if _, ok := m.parents[x]; !ok {
+		m.parents[x] = x
+		m.children[x] = make([]string, 1)
+		m.children[x][0] = x
 	}
 }
 
-func (uf *unionFind) find(x string) string {
-	uf.ensure(x)
-	if uf.parent[x] != x {
-		uf.parent[x] = uf.find(uf.parent[x])
-	}
-	return uf.parent[x]
-}
-
-func (uf *unionFind) union(a, b string) {
-	ra, rb := uf.find(a), uf.find(b)
+func (m *batchBuilder) union(a, b string) {
+	ra, rb := m.parents[a], m.parents[b]
 	if ra == rb {
 		return
 	}
-	if uf.rank[ra] < uf.rank[rb] {
-		ra, rb = rb, ra
-	}
-	uf.parent[rb] = ra
-	if uf.rank[ra] == uf.rank[rb] {
-		uf.rank[ra]++
+
+	for _, child := range m.children[rb] {
+		m.children[ra] = append(m.children[ra], child)
+		m.parents[child] = ra
+		delete(m.children, rb)
 	}
 }
 
+func (m *batchBuilder) root(x string) string {
+	return m.parents[x]
+}
+
+// memberAssetKey returns a unique string key for a (member, asset) pair.
 func memberAssetKey(member, asset string) string {
-	return member + "\x00" + asset
+	if member == "M02_T1" && asset == "EUR" {
+		fmt.Println("here")
+	}
+	return member + "-" + asset
 }
 
+// splitBatches partitions a single settlement result into independent batches
+// using a union-find over member-asset keys. Trades and instructions that share
+// no member-asset overlap end up in separate batches and can be settled
+// atomically and independently. Deferred trades are collected separately and
+// returned in Results.Deferred.
 func splitBatches(result *Result) Results {
 	if result == nil || (len(result.Trades) == 0 && len(result.Instructions) == 0) {
 		return Results{}
@@ -62,7 +114,7 @@ func splitBatches(result *Result) Results {
 		}
 	}
 
-	uf := newUnionFind()
+	uf := newBatchBuilder()
 
 	for _, tr := range settled {
 		t := tr.Trade
@@ -70,6 +122,11 @@ func splitBatches(result *Result) Results {
 		buyerQuote := memberAssetKey(t.Buyer(), t.QuoteAsset())
 		sellerBase := memberAssetKey(t.Seller(), t.BaseAsset())
 		sellerQuote := memberAssetKey(t.Seller(), t.QuoteAsset())
+
+		if buyerBase == "M02_T1-EUR" || buyerQuote == "M02_T1-EUR" || sellerBase == "M02_T1-EUR" || sellerQuote == "M02_T1-EUR" {
+			fmt.Println("here")
+		}
+
 		uf.ensure(buyerBase)
 		uf.ensure(buyerQuote)
 		uf.ensure(sellerBase)
@@ -85,13 +142,13 @@ func splitBatches(result *Result) Results {
 
 	tradesByRoot := make(map[string][]*TradeResult)
 	for _, tr := range settled {
-		root := uf.find(memberAssetKey(tr.Trade.Buyer(), tr.Trade.BaseAsset()))
+		root := uf.root(memberAssetKey(tr.Trade.Buyer(), tr.Trade.BaseAsset()))
 		tradesByRoot[root] = append(tradesByRoot[root], tr)
 	}
 
 	instrByRoot := make(map[string][]*Instruction)
 	for _, inst := range result.Instructions {
-		root := uf.find(memberAssetKey(inst.Member, inst.Asset))
+		root := uf.root(memberAssetKey(inst.Member, inst.Asset))
 		instrByRoot[root] = append(instrByRoot[root], inst)
 	}
 

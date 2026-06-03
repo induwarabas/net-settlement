@@ -61,6 +61,12 @@ type LedgerEntry interface {
 	Balance() decimal.Decimal
 }
 
+// GenerateInstructions runs the settlement engine over the provided trades and
+// ledger balances and returns settlement instructions grouped into independent
+// batches, along with any trades that could not be settled (deferred).
+//
+// When strictFifo is true, an unsettled trade blocks all later trades
+// for the same member-asset pair from settling until the earlier one clears.
 func GenerateInstructions(trades []Trade, ledger []LedgerEntry, strictFifo bool) Results {
 	eng := newEngine(strictFifo)
 	eng.init(trades, ledger)

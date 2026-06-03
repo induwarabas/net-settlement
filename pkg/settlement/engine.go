@@ -57,6 +57,7 @@ type engine struct {
 	strictFifo        bool
 }
 
+// newEngine creates an empty settlement engine. Call init before run.
 func newEngine(strictFifo bool) *engine {
 	m := &engine{
 		ledger:         make([][]*big.Int, 0),
@@ -71,6 +72,7 @@ func newEngine(strictFifo bool) *engine {
 	return m
 }
 
+// memberId returns the integer ID for a member name, creating one if needed.
 func (m *engine) memberId(member string) int {
 	id, ok := m.memberIndex[member]
 	if !ok {
@@ -80,6 +82,7 @@ func (m *engine) memberId(member string) int {
 	return id
 }
 
+// assetId returns the integer ID for an asset symbol, creating one if needed.
 func (m *engine) assetId(asset string) int {
 	id, ok := m.assetIndex[asset]
 	if !ok {
@@ -89,6 +92,9 @@ func (m *engine) assetId(asset string) int {
 	return id
 }
 
+// init sorts trades by execution time, indexes all members and assets, seeds the
+// netting matrix from ledger balances, and builds per-member-asset liability
+// lists that the iterative resolver will walk in reverse (newest-first) order.
 func (m *engine) init(trades []Trade, ledger []LedgerEntry) {
 	slog.Info("Initializing settlement engine")
 	sort.SliceStable(trades, func(i, j int) bool {
@@ -175,16 +181,23 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry) {
 	slog.Info("Settlement engine initialized.", "trades", len(m.trades), "members", len(m.members), "assets", len(m.assets))
 }
 
+// calculateNetting applies every trade's full quantity to the netting matrix.
+// After this step, a negative netting[member][asset] value means that member's
+// current balance is insufficient to cover their net obligation.
 func (m *engine) calculateNetting() {
 	for _, trd := range m.trades {
-		m.netting[trd.Buyer][trd.BaseAsset].Add(m.netting[trd.Buyer][trd.BaseAsset], trd.BaseQuantity)
-		m.netting[trd.Buyer][trd.QuoteAsset].Sub(m.netting[trd.Buyer][trd.QuoteAsset], trd.QuoteQuantity)
+		m.netting[trd.Buyer][trd.BaseAsset].Add(m.netting[trd.Buyer][trd.BaseAsset], trd.RemainingBaseQty)
+		m.netting[trd.Buyer][trd.QuoteAsset].Sub(m.netting[trd.Buyer][trd.QuoteAsset], trd.RemainingQuoteQty)
 
-		m.netting[trd.Seller][trd.BaseAsset].Sub(m.netting[trd.Seller][trd.BaseAsset], trd.BaseQuantity)
-		m.netting[trd.Seller][trd.QuoteAsset].Add(m.netting[trd.Seller][trd.QuoteAsset], trd.QuoteQuantity)
+		m.netting[trd.Seller][trd.BaseAsset].Sub(m.netting[trd.Seller][trd.BaseAsset], trd.RemainingBaseQty)
+		m.netting[trd.Seller][trd.QuoteAsset].Add(m.netting[trd.Seller][trd.QuoteAsset], trd.RemainingQuoteQty)
 	}
 }
 
+// runIteration finds every member-asset pair with a negative netting balance and
+// reverses the minimum amount of the most-recent trades (LIFO order) needed to
+// eliminate each deficit. Returns true if any negatives were found so the caller
+// knows to run another pass.
 func (m *engine) runIteration() bool {
 	m.negativeLocations = make([]*location, 0)
 	for i, assets := range m.netting {
@@ -239,9 +252,14 @@ func (m *engine) runIteration() bool {
 			}
 		}
 	}
+	m.deferFollowingTradesIfNotFullySettledx()
 	return true
 }
 
+// reverseTrade reduces a trade's remaining quantity by qty and unwinds the
+// corresponding netting entries. When base is true, qty is denominated in the
+// base asset and the quote amount is derived proportionally; otherwise qty is
+// denominated in the quote asset.
 func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	if trade.BaseQuantity.Sign() == 0 || trade.QuoteQuantity.Sign() == 0 {
 		return
@@ -264,6 +282,9 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	m.netting[trade.Seller][trade.QuoteAsset].Sub(m.netting[trade.Seller][trade.QuoteAsset], quoteQty)
 }
 
+// run executes the full settlement pipeline: netting, iterative deficit
+// resolution, trade classification, optional strict-FIFO enforcement, instruction
+// generation, and batch splitting. It returns the final Results.
 func (m *engine) run() Results {
 	startTime := time.Now().UnixNano()
 	m.calculateNetting()
@@ -282,14 +303,29 @@ func (m *engine) run() Results {
 
 	trades := make([]*TradeResult, 0)
 
+	for member := 0; member < len(m.members); member++ {
+		for asset := 0; asset < len(m.assets); asset++ {
+			m.netting[member][asset] = new(big.Int).Set(m.ledger[member][asset])
+		}
+	}
+
 	for j, trd := range m.trades {
 		originalTrade := m.originalTrades[j]
+		trd.RemainingQuoteQty = multiplyAndDivide(trd.QuoteQuantity, trd.RemainingBaseQty, trd.BaseQuantity)
 		status := TradeResultStatusPartial
-		if trd.RemainingBaseQty.Sign() == 0 {
+		if trd.RemainingBaseQty.Sign() == 0 || trd.RemainingQuoteQty.Sign() == 0 {
+			trd.RemainingQuoteQty = big.NewInt(0)
+			trd.RemainingBaseQty = big.NewInt(0)
 			status = TradeResultStatusDeferred
-		} else if trd.RemainingBaseQty.Cmp(trd.BaseQuantity) == 0 {
+		} else if trd.RemainingBaseQty.Cmp(trd.BaseQuantity) == 0 || trd.RemainingQuoteQty.Cmp(trd.QuoteQuantity) == 0 {
+			trd.RemainingQuoteQty = new(big.Int).Set(trd.QuoteQuantity)
+			trd.RemainingBaseQty = new(big.Int).Set(trd.BaseQuantity)
+			if trd.RemainingBaseQty.Sign() == 0 || trd.RemainingQuoteQty.Sign() == 0 {
+				fmt.Println("Can't be")
+			}
 			status = TradeResultStatusFull
 		}
+
 		trdResult := &TradeResult{
 			Trade:                 originalTrade,
 			Status:                status,
@@ -301,20 +337,15 @@ func (m *engine) run() Results {
 		trades = append(trades, trdResult)
 	}
 
-	if m.strictFifo {
-		for {
-			if !m.deferFollowingTradesIfNotFullySettled(trades) {
-				break
-			}
-		}
-	}
+	m.calculateNetting()
 
 	instructions := make([]*Instruction, 0)
 
 	for member := 0; member < len(m.members); member++ {
 		for asset := 0; asset < len(m.assets); asset++ {
 			diff := new(big.Int).Sub(m.netting[member][asset], m.ledger[member][asset])
-			if diff.Sign() == 0 {
+			netAmount := toDecimal(new(big.Int).Abs(diff))
+			if netAmount.Sign() == 0 {
 				continue
 			}
 
@@ -357,53 +388,98 @@ func (m *engine) run() Results {
 	return batches
 }
 
-func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) bool {
-	for i := 0; i < len(m.memberIndex); i++ {
-		for j := 0; j < len(m.assetIndex); j++ {
-			m.netting[i][j] = new(big.Int).Set(m.ledger[i][j])
-		}
-	}
-
-	modified := false
-
-	deferred := make(map[string]bool)
-
-	for _, trd := range trades {
-		buyerKey := fmt.Sprintf("%s-%s", trd.Trade.Buyer(), trd.Trade.QuoteAsset())
-		sellerKey := fmt.Sprintf("%s-%s", trd.Trade.Seller(), trd.Trade.BaseAsset())
-		if deferred[buyerKey] || deferred[sellerKey] {
-			if trd.Status != TradeResultStatusDeferred {
-				modified = true
+// deferFollowingTradesIfNotFullySettled enforces strict FIFO ordering: any trade
+// that shares a member-asset pair with an earlier non-fully-settled trade is
+// force-deferred. The netting matrix is rebuilt from the remaining settled trades
+// so subsequent passes see the correct balances. Returns true if any trade status
+// changed, indicating another pass is required.
+func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
+	for {
+		for i := 0; i < len(m.memberIndex); i++ {
+			for j := 0; j < len(m.assetIndex); j++ {
+				m.netting[i][j] = new(big.Int).Set(m.ledger[i][j])
 			}
-			trd.Status = TradeResultStatusDeferred
-			trd.SettledQuoteQuantity = decimal.Zero
-			trd.SettledQuantity = decimal.Zero
-			trd.DeferredQuantity = trd.Trade.Quantity()
-			trd.DeferredQuoteQuantity = trd.Trade.Price().Mul(trd.Trade.Quantity())
-			deferred[buyerKey] = true
-			deferred[sellerKey] = true
-			continue
-		}
-		if trd.Status != TradeResultStatusFull {
-			deferred[buyerKey] = true
-			deferred[sellerKey] = true
 		}
 
-		if trd.Status == TradeResultStatusDeferred {
-			continue
+		modified := false
+
+		deferred := make(map[string]bool)
+
+		for _, trd := range trades {
+			buyerKey := fmt.Sprintf("%s-%s", trd.Trade.Buyer(), trd.Trade.QuoteAsset())
+			sellerKey := fmt.Sprintf("%s-%s", trd.Trade.Seller(), trd.Trade.BaseAsset())
+			if deferred[buyerKey] || deferred[sellerKey] {
+				if trd.Status != TradeResultStatusDeferred {
+					modified = true
+				}
+				trd.Status = TradeResultStatusDeferred
+				trd.SettledQuoteQuantity = decimal.Zero
+				trd.SettledQuantity = decimal.Zero
+				trd.DeferredQuantity = trd.Trade.Quantity()
+				trd.DeferredQuoteQuantity = trd.Trade.Price().Mul(trd.Trade.Quantity())
+				deferred[buyerKey] = true
+				deferred[sellerKey] = true
+				continue
+			}
+			if trd.Status != TradeResultStatusFull {
+				deferred[buyerKey] = true
+				deferred[sellerKey] = true
+			}
+
+			if trd.Status == TradeResultStatusDeferred {
+				continue
+			}
+			buyerId := m.memberIndex[trd.Trade.Buyer()]
+			sellerId := m.memberIndex[trd.Trade.Seller()]
+			baseAssetId := m.assetIndex[trd.Trade.BaseAsset()]
+			quoteAssetId := m.assetIndex[trd.Trade.QuoteAsset()]
+			m.netting[buyerId][baseAssetId] = new(big.Int).Add(m.netting[buyerId][baseAssetId], fromDecimal(trd.SettledQuantity))
+			m.netting[sellerId][quoteAssetId] = new(big.Int).Add(m.netting[sellerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
+			m.netting[buyerId][quoteAssetId] = new(big.Int).Sub(m.netting[buyerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
+			m.netting[sellerId][baseAssetId] = new(big.Int).Sub(m.netting[sellerId][baseAssetId], fromDecimal(trd.SettledQuantity))
 		}
-		buyerId := m.memberIndex[trd.Trade.Buyer()]
-		sellerId := m.memberIndex[trd.Trade.Seller()]
-		baseAssetId := m.assetIndex[trd.Trade.BaseAsset()]
-		quoteAssetId := m.assetIndex[trd.Trade.QuoteAsset()]
-		m.netting[buyerId][baseAssetId] = new(big.Int).Add(m.netting[buyerId][baseAssetId], fromDecimal(trd.SettledQuantity))
-		m.netting[sellerId][quoteAssetId] = new(big.Int).Add(m.netting[sellerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
-		m.netting[buyerId][quoteAssetId] = new(big.Int).Sub(m.netting[buyerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
-		m.netting[sellerId][baseAssetId] = new(big.Int).Sub(m.netting[sellerId][baseAssetId], fromDecimal(trd.SettledQuantity))
+		if !modified {
+			break
+		}
 	}
-	return modified
+
 }
 
+func (m *engine) deferFollowingTradesIfNotFullySettledx() {
+	for {
+		modified := false
+
+		deferred := make(map[string]bool)
+
+		for _, trd := range m.trades {
+			buyerKey := fmt.Sprintf("%d-%d", trd.Buyer, trd.QuoteAsset)
+			sellerKey := fmt.Sprintf("%d-%d", trd.Seller, trd.BaseAsset)
+			revertQty := new(big.Int).Set(trd.RemainingBaseQty)
+			if deferred[buyerKey] || deferred[sellerKey] {
+				deferred[buyerKey] = true
+				deferred[sellerKey] = true
+				if revertQty.Sign() == 0 {
+					continue
+				}
+				m.reverseTrade(trd, revertQty, true)
+				modified = true
+				continue
+			}
+			if trd.BaseQuantity.Cmp(trd.RemainingBaseQty) == 0 {
+				continue
+			}
+			deferred[buyerKey] = true
+			deferred[sellerKey] = true
+		}
+		if !modified {
+			break
+		}
+	}
+
+}
+
+// printNettingTable writes the current netting matrix to a CSV file at
+// data/netting-<index>-x.csv. Used for debugging.
 func (m *engine) printNettingTable(index int) error {
 	if err := os.MkdirAll("data", 0755); err != nil {
 		return err
