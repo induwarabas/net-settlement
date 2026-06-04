@@ -8,8 +8,8 @@ import (
 
 const Places = 18
 
-var Scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(Places), nil)
-var ScaleDecimal = decimal.New(1, Places)
+var Scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(Places+2), nil)
+var ScaleDecimal = decimal.New(1, Places+2)
 
 // multiply multiplies two scaled big.Ints and renormalises by Scale so the
 // result remains in the same fixed-point representation.
@@ -35,5 +35,5 @@ func fromDecimal(value decimal.Decimal) *big.Int {
 
 // toDecimal converts a scaled big.Int back to a decimal.Decimal (÷ 1_000_000).
 func toDecimal(value *big.Int) decimal.Decimal {
-	return decimal.NewFromBigInt(value, 0).Div(ScaleDecimal)
+	return decimal.NewFromBigInt(value, 0).Div(ScaleDecimal).Round(Places)
 }

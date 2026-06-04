@@ -268,9 +268,29 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	if base {
 		baseQty = qty
 		quoteQty = multiplyAndDivide(qty, trade.QuoteQuantity, trade.BaseQuantity)
+		// Ensure the non-driving side is never zero when the driving side is positive.
+		// A zero result from integer truncation would leave RemainingQuoteQty unchanged,
+		// causing the line-314 recalculation to restore it to the original value and the
+		// trade to be misclassified as FULL.
+		if quoteQty.Sign() == 0 && qty.Sign() > 0 {
+			quoteQty = big.NewInt(1)
+		}
 	} else {
 		quoteQty = qty
 		baseQty = multiplyAndDivide(qty, trade.BaseQuantity, trade.QuoteQuantity)
+		// Same guard for the base side: a zero result means RemainingBaseQty is never
+		// decremented, so the trade appears to fully settle and stops blocking FIFO.
+		if baseQty.Sign() == 0 && qty.Sign() > 0 {
+			baseQty = big.NewInt(1)
+		}
+	}
+
+	// Clamp to avoid over-reversing in the rare case where minimum-1 exceeds what remains.
+	if baseQty.Cmp(trade.RemainingBaseQty) > 0 {
+		baseQty = new(big.Int).Set(trade.RemainingBaseQty)
+	}
+	if quoteQty.Cmp(trade.RemainingQuoteQty) > 0 {
+		quoteQty = new(big.Int).Set(trade.RemainingQuoteQty)
 	}
 
 	trade.RemainingBaseQty.Sub(trade.RemainingBaseQty, baseQty)
