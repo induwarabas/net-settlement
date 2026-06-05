@@ -521,7 +521,7 @@ func (m *engine) run() Results {
 		for asset := 0; asset < len(m.assets); asset++ {
 			precision := m.assets[asset].Precision()
 			diff := new(big.Int).Sub(m.netting[member][asset], m.ledger[member][asset])
-			absDiff := roundToPrecision(new(big.Int).Abs(diff), precision, roundDown)
+			absDiff := roundToPrecision(new(big.Int).Abs(diff), precision, roundUp)
 			if absDiff.Sign() == 0 {
 				continue
 			}

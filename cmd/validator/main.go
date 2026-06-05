@@ -1,6 +1,7 @@
 // Command validator cross-checks the output of the settlement engine against
-// its input trades. It loads trades.csv, trade-settlements.csv and
-// settlement-instructions.csv from a single data folder and verifies:
+// its input trades. It loads trades.csv from data/<dataset-name>/ and the
+// engine's outputs (trade-settlements.csv, settlement-instructions.csv) from
+// output/<dataset-name>/ and verifies:
 //
 //  1. Net per-(member, asset) trade movements reconcile with the issued
 //     settlement instructions (within engine rounding precision).
@@ -12,15 +13,20 @@
 //
 // Usage:
 //
-//	validator [data-folder]
+//	validator [dataset-name]
+//
+// If dataset-name is omitted, the available subfolders under data/ are listed
+// and the user is prompted to pick one interactively.
 package main
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,16 +69,15 @@ type memberAsset struct {
 }
 
 func main() {
-	path := "data"
-	if len(os.Args) >= 2 {
-		path = os.Args[1]
-	}
+	name := selectDataset(os.Args)
+	inDir := filepath.Join("data", name)
+	outDir := filepath.Join("output", name)
 
-	slog.Info("Validating settlement output.", "path", path)
+	slog.Info("Validating settlement output.", "input", inDir, "output", outDir)
 
-	trades := loadTradesCSV(path + "/trades.csv")
-	settlements := loadSettlementsCSV(path + "/trade-settlements.csv")
-	instructions := loadInstructionsCSV(path + "/settlement-instructions.csv")
+	trades := loadTradesCSV(filepath.Join(inDir, "trades.csv"))
+	settlements := loadSettlementsCSV(filepath.Join(outDir, "trade-settlements.csv"))
+	instructions := loadInstructionsCSV(filepath.Join(outDir, "settlement-instructions.csv"))
 
 	errors := 0
 	errors += validateNetAmounts(trades, settlements, instructions)
@@ -84,6 +89,49 @@ func main() {
 		slog.Error("Validation failed.", "errors", errors)
 		os.Exit(1)
 	}
+}
+
+// selectDataset returns the dataset folder name to use under data/. If args
+// has a value at index 1, it is used as-is. Otherwise the subfolders of data/
+// are listed and the user is prompted to pick one interactively.
+func selectDataset(args []string) string {
+	if len(args) >= 2 {
+		return args[1]
+	}
+
+	const root = "data"
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		panic(fmt.Sprintf("read %s: %v", root, err))
+	}
+
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		panic(fmt.Sprintf("no dataset folders found in %s/", root))
+	}
+
+	fmt.Printf("Available datasets in %s/:\n", root)
+	for i, n := range names {
+		fmt.Printf("  [%d] %s\n", i+1, n)
+	}
+	fmt.Printf("Select dataset (1-%d): ", len(names))
+
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		panic(fmt.Sprintf("read selection: %v", err))
+	}
+	choice := strings.TrimSpace(line)
+	n, err := strconv.Atoi(choice)
+	if err != nil || n < 1 || n > len(names) {
+		panic(fmt.Sprintf("invalid selection: %q", choice))
+	}
+	return names[n-1]
 }
 
 // precision is the tolerance for net amount comparisons; it covers rounding
