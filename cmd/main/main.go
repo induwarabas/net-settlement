@@ -1,3 +1,19 @@
+// Command settlement reads trades, ledger balances and asset reference data
+// from a CSV folder, runs the settlement engine, and writes the resulting
+// settlement instructions and per-trade detail back into the same folder.
+//
+// Usage:
+//
+//	settlement [data-folder]
+//
+// The data folder defaults to "data". Expected input files:
+//   - trades.csv
+//   - ledger.csv
+//   - assets.csv
+//
+// Output files written next to the inputs:
+//   - settlement-instructions.csv
+//   - trade-settlements.csv
 package main
 
 import (

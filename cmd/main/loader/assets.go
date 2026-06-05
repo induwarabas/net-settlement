@@ -1,3 +1,6 @@
+// Package loader reads settlement input CSV files (trades, ledger balances,
+// asset reference data) into plain Go structs. Loaders panic on any I/O or
+// parse error since they are only invoked by the CLI entry point.
 package loader
 
 import (
@@ -10,12 +13,17 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// Asset is one row of the assets reference CSV. Precision is the number of
+// decimal places the asset supports; DustThreshold is the smallest amount the
+// engine treats as economically meaningful for that asset.
 type Asset struct {
 	Symbol        string
 	DustThreshold decimal.Decimal
 	Precision     int
 }
 
+// LoadAssets reads asset reference data from a CSV with header
+// "Asset,Dust Threshold,Precision" and returns one Asset per data row.
 func LoadAssets(path string) []*Asset {
 	f, err := os.Open(path)
 	if err != nil {

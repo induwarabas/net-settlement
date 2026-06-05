@@ -10,6 +10,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// Trade is one row of the trades CSV. Only the fields the engine and the
+// output writer need are extracted; account-level identifiers in the CSV are
+// ignored.
 type Trade struct {
 	TradeID    string
 	ExecTime   time.Time
@@ -23,6 +26,10 @@ type Trade struct {
 	SellMember string
 }
 
+// LoadTrades reads trade rows from the trades CSV. The file may start with a
+// UTF-8 BOM (Excel-exported files commonly do); it is stripped if present.
+// Timestamps are parsed as RFC3339Nano with a fallback for millisecond-only
+// UTC stamps.
 func LoadTrades(path string) []*Trade {
 	f, err := os.Open(path)
 	if err != nil {

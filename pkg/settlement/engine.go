@@ -12,6 +12,11 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// trade is the engine's internal, scaled-integer representation of a Trade.
+// Members and assets are interned to integer IDs; quantities are stored as
+// big.Int values scaled by the package-wide Scale. RemainingBaseQty and
+// RemainingQuoteQty are mutable trackers for how much of the trade is still
+// intended to settle after iterative reversal.
 type trade struct {
 	TradeId           int
 	Buyer             int
@@ -29,16 +34,23 @@ type trade struct {
 	QuotePrecision    int
 }
 
+// assetLiability is the per-(member, asset) ordered list of trades that
+// generate a debit obligation against that member's balance of that asset.
+// Start points at the newest trade not yet fully reversed; the resolver walks
+// it backwards (LIFO) when unwinding a deficit.
 type assetLiability struct {
 	Start  int
 	Trades []*trade
 }
 
+// location identifies a single cell of the netting matrix by member and asset
+// integer IDs.
 type location struct {
 	member int
 	asset  int
 }
 
+// newLocation returns a location pointing at netting[member][asset].
 func newLocation(member int, asset int) *location {
 	return &location{
 		member: member,
@@ -46,6 +58,10 @@ func newLocation(member int, asset int) *location {
 	}
 }
 
+// engine holds the mutable working state for a single settlement run: interned
+// member/asset IDs, the ledger and netting matrices, the per-position trade
+// liability lists, and the original trade objects (kept so TradeResults can
+// reference the caller's input).
 type engine struct {
 	ledger            [][]*big.Int
 	netting           [][]*big.Int
@@ -96,9 +112,14 @@ func (m *engine) assetId(asset string) int {
 	return id
 }
 
-// init sorts trades by execution time, indexes all members and assets, seeds the
-// netting matrix from ledger balances, and builds per-member-asset liability
-// lists that the iterative resolver will walk in reverse (newest-first) order.
+// init prepares the engine for a run: sorts trades by execution time, interns
+// every member and asset to an integer ID, rounds all input quantities and
+// balances to each asset's declared precision, seeds the netting matrix from
+// ledger balances, and builds per-(member, asset) liability lists that the
+// iterative resolver walks in reverse (newest-first) order.
+//
+// Returns an error if any trade references an asset that has no entry in the
+// supplied asset reference data.
 func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) error {
 	slog.Info("Initializing settlement engine")
 	sort.SliceStable(trades, func(i, j int) bool {
@@ -430,8 +451,9 @@ func (m *engine) applyDustRules(trade *trade, baseQty, quoteQty *big.Int) (*big.
 }
 
 // run executes the full settlement pipeline: netting, iterative deficit
-// resolution, trade classification, optional strict-FIFO enforcement, instruction
-// generation, and batch splitting. It returns the final Results.
+// resolution (each iteration also enforces FIFO ordering of partials),
+// dust-aware trade classification, instruction generation rounded to asset
+// precision, and batch splitting. It returns the final Results.
 func (m *engine) run() Results {
 	startTime := time.Now().UnixNano()
 	m.calculateNetting()
@@ -541,11 +563,16 @@ func (m *engine) run() Results {
 	return batches
 }
 
-// deferFollowingTradesIfNotFullySettled enforces strict FIFO ordering: any trade
-// that shares a member-asset pair with an earlier non-fully-settled trade is
-// force-deferred. The netting matrix is rebuilt from the remaining settled trades
-// so subsequent passes see the correct balances. Returns true if any trade status
-// changed, indicating another pass is required.
+// deferFollowingTradesIfNotFullySettled enforces strict FIFO ordering on a
+// classified TradeResult slice: any trade that shares a member-asset pair with
+// an earlier non-fully-settled trade is force-deferred. The netting matrix is
+// rebuilt from the remaining settled trades so subsequent passes see the
+// correct balances. Loops until a pass produces no changes.
+//
+// This variant operates on the externally facing TradeResult slice. The
+// production path uses [engine.deferFollowingTradesIfNotFullySettledx], which
+// operates on the engine's internal trade structs and is called at the end of
+// each [engine.runIteration].
 func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
 	for {
 		for i := 0; i < len(m.memberIndex); i++ {
@@ -598,6 +625,14 @@ func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
 
 }
 
+// deferFollowingTradesIfNotFullySettledx enforces strict FIFO ordering on the
+// engine's internal trade structs. Walking trades in execution-time order, any
+// trade that shares a buyer-quote or seller-base position with an earlier
+// non-fully-settled trade is fully reversed via reverseTrade (which updates
+// the netting matrix accordingly). Loops until a pass produces no changes.
+//
+// Called at the end of every [engine.runIteration]; the outer convergence loop
+// re-runs until no negatives remain.
 func (m *engine) deferFollowingTradesIfNotFullySettledx() {
 	for {
 		modified := false

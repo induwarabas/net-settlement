@@ -1,3 +1,18 @@
+// Command validator cross-checks the output of the settlement engine against
+// its input trades. It loads trades.csv, trade-settlements.csv and
+// settlement-instructions.csv from a single data folder and verifies:
+//
+//  1. Net per-(member, asset) trade movements reconcile with the issued
+//     settlement instructions (within engine rounding precision).
+//  2. Strict FIFO ordering — once a trade for a given (member, asset) debit
+//     position is PARTIAL or DEFERRED, all later trades for that position
+//     must be DEFERRED.
+//
+// Exits with status 1 if any check fails.
+//
+// Usage:
+//
+//	validator [data-folder]
 package main
 
 import (
@@ -14,11 +29,14 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// tradeInfo carries just the buyer/seller pair the validator needs from each
+// row of trades.csv.
 type tradeInfo struct {
 	buyer  string
 	seller string
 }
 
+// settlementRow is a parsed row of trade-settlements.csv.
 type settlementRow struct {
 	tradeID         string
 	execTime        time.Time
@@ -29,6 +47,7 @@ type settlementRow struct {
 	status          string
 }
 
+// instructionRow is a parsed row of settlement-instructions.csv.
 type instructionRow struct {
 	member    string
 	asset     string
@@ -36,6 +55,8 @@ type instructionRow struct {
 	direction string
 }
 
+// memberAsset is the composite key used to index per-position net movements
+// and settlement instructions.
 type memberAsset struct {
 	member string
 	asset  string
@@ -207,6 +228,8 @@ func validateFIFO(trades map[string]*tradeInfo, settlements []*settlementRow) in
 	return errors
 }
 
+// loadTradesCSV reads trades.csv (handling an optional UTF-8 BOM) into a
+// tradeID -> tradeInfo map, keeping only the fields the validator needs.
 func loadTradesCSV(path string) map[string]*tradeInfo {
 	f, err := os.Open(path)
 	if err != nil {
@@ -246,6 +269,8 @@ func loadTradesCSV(path string) map[string]*tradeInfo {
 	return result
 }
 
+// loadSettlementsCSV reads trade-settlements.csv into a slice of
+// settlementRow, preserving file order.
 func loadSettlementsCSV(path string) []*settlementRow {
 	f, err := os.Open(path)
 	if err != nil {
@@ -287,6 +312,8 @@ func loadSettlementsCSV(path string) []*settlementRow {
 	return rows
 }
 
+// loadInstructionsCSV reads settlement-instructions.csv into a slice of
+// instructionRow.
 func loadInstructionsCSV(path string) []*instructionRow {
 	f, err := os.Open(path)
 	if err != nil {
@@ -319,6 +346,8 @@ func loadInstructionsCSV(path string) []*instructionRow {
 	return rows
 }
 
+// parseTimestamp parses a settlement-output timestamp, accepting RFC3339Nano
+// and a few common millisecond / second variants the engine may emit.
 func parseTimestamp(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	formats := []string{
@@ -335,6 +364,9 @@ func parseTimestamp(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unrecognised timestamp format: %q", s)
 }
 
+// parseDecimal parses a CSV numeric cell into a decimal.Decimal, stripping
+// thousands separators and surrounding whitespace. An empty cell parses as
+// zero; any other unparseable input panics.
 func parseDecimal(s string) decimal.Decimal {
 	s = strings.ReplaceAll(s, ",", "")
 	s = strings.TrimSpace(s)

@@ -49,11 +49,16 @@ import (
 //	}
 //}
 
+// batchBuilder is a flat-parent union-find over string keys used to group
+// member-asset cells into independent settlement batches. Each element's
+// parent is updated eagerly on union so root lookups are O(1); the trade-off
+// is that union is O(size of the smaller component) rather than near-constant.
 type batchBuilder struct {
 	parents  map[string]string
 	children map[string][]string
 }
 
+// newBatchBuilder returns an empty batchBuilder.
 func newBatchBuilder() *batchBuilder {
 	return &batchBuilder{
 		parents:  make(map[string]string),
@@ -61,6 +66,7 @@ func newBatchBuilder() *batchBuilder {
 	}
 }
 
+// ensure registers x as its own component if not already present.
 func (m *batchBuilder) ensure(x string) {
 	if _, ok := m.parents[x]; !ok {
 		m.parents[x] = x
@@ -69,6 +75,8 @@ func (m *batchBuilder) ensure(x string) {
 	}
 }
 
+// union merges the components containing a and b. After it returns, every
+// element of b's old component reports a's root.
 func (m *batchBuilder) union(a, b string) {
 	ra, rb := m.parents[a], m.parents[b]
 	if ra == rb {
@@ -82,11 +90,13 @@ func (m *batchBuilder) union(a, b string) {
 	}
 }
 
+// root returns the component representative for x. x must have been registered
+// via ensure (directly or as part of a union).
 func (m *batchBuilder) root(x string) string {
 	return m.parents[x]
 }
 
-// memberAssetKey returns a unique string key for a (member, asset) pair.
+// memberAssetKey returns the canonical string key for a (member, asset) pair.
 func memberAssetKey(member, asset string) string {
 	if member == "M02_T1" && asset == "EUR" {
 		fmt.Println("here")

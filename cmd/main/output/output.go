@@ -1,3 +1,5 @@
+// Package output writes settlement engine results to the two CSV files the
+// CLI produces: settlement-instructions.csv and trade-settlements.csv.
 package output
 
 import (
@@ -10,6 +12,9 @@ import (
 	"time"
 )
 
+// WriteInstructions writes the per-(batch, member, asset) settlement
+// instructions to a CSV at path. Rows are ordered by batch, then member, then
+// asset so the output is deterministic across runs.
 func WriteInstructions(path string, results settlement.Results) {
 	type entry struct {
 		batch int
@@ -57,6 +62,9 @@ func WriteInstructions(path string, results settlement.Results) {
 	w.Flush()
 }
 
+// WriteTradeDetail writes one CSV row per trade, including each trade's
+// classification (FULL / PARTIAL / DEFERRED), settled and deferred amounts on
+// both sides, and the batch it belongs to (blank for deferred trades).
 func WriteTradeDetail(path string, results settlement.Results) {
 	f, err := os.Create(path)
 	if err != nil {

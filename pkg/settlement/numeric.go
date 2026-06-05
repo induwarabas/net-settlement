@@ -6,11 +6,20 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// Places is the number of decimal places preserved when converting an engine
+// big.Int back to a decimal.Decimal. scaleDigits adds two extra digits of
+// headroom so intermediate multiplications and divisions don't lose precision
+// at the Places boundary.
 const Places = 18
 const scaleDigits = Places + 2
 
-var Scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDigits), nil)
-var ScaleDecimal = decimal.New(1, scaleDigits)
+// Scale is the fixed-point multiplier (10^scaleDigits) applied to every value
+// inside the engine; ScaleDecimal is the same factor expressed as a
+// decimal.Decimal for boundary conversions.
+var (
+	Scale        = new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDigits), nil)
+	ScaleDecimal = decimal.New(1, scaleDigits)
+)
 
 type roundingMode int
 
