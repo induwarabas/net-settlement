@@ -120,10 +120,10 @@ func validateNetAmounts(trades map[string]*tradeInfo, settlements []*settlementR
 			continue
 		}
 
-		wantDir := "CREDIT"
+		wantDir := "IN"
 		wantAmt := netVal
 		if netVal.IsNegative() {
-			wantDir = "DEBIT"
+			wantDir = "OUT"
 			wantAmt = netVal.Neg()
 		}
 

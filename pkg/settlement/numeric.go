@@ -7,9 +7,56 @@ import (
 )
 
 const Places = 18
+const scaleDigits = Places + 2
 
-var Scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(Places+2), nil)
-var ScaleDecimal = decimal.New(1, Places+2)
+var Scale = new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDigits), nil)
+var ScaleDecimal = decimal.New(1, scaleDigits)
+
+type roundingMode int
+
+const (
+	roundDown roundingMode = iota
+	roundUp
+)
+
+// precisionStep returns the scaled big.Int representing one unit at the given
+// asset precision (e.g. precision=2 -> 10^(scaleDigits-2)). Values that are
+// multiples of this step have no digits beyond the asset's precision.
+func precisionStep(precision int) *big.Int {
+	if precision >= scaleDigits {
+		return big.NewInt(1)
+	}
+	if precision < 0 {
+		precision = 0
+	}
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDigits-precision)), nil)
+}
+
+// roundToPrecision snaps a non-negative scaled value to the asset's precision
+// using the requested rounding mode.
+func roundToPrecision(value *big.Int, precision int, mode roundingMode) *big.Int {
+	if value.Sign() == 0 {
+		return new(big.Int)
+	}
+	step := precisionStep(precision)
+	if step.Cmp(big.NewInt(1)) == 0 {
+		return new(big.Int).Set(value)
+	}
+	q, r := new(big.Int).QuoRem(value, step, new(big.Int))
+	if mode == roundUp && r.Sign() != 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	return q.Mul(q, step)
+}
+
+// isBelowDust reports whether value is strictly positive but smaller than dust.
+// Exactly zero is not considered dust.
+func isBelowDust(value, dust *big.Int) bool {
+	if value.Sign() <= 0 {
+		return false
+	}
+	return value.Cmp(dust) < 0
+}
 
 // multiply multiplies two scaled big.Ints and renormalises by Scale so the
 // result remains in the same fixed-point representation.

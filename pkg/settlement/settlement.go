@@ -31,10 +31,10 @@ type TradeResult struct {
 type InstructionDirection string
 
 // Remove assets from ledger
-const InstructionDirectionDebit = InstructionDirection("DEBIT")
+const InstructionDirection_Out = InstructionDirection("OUT")
 
 // Add assets to ledger
-const InstructionDirectionCredit = InstructionDirection("CREDIT")
+const InstructionDirection_In = InstructionDirection("IN")
 
 type Instruction struct {
 	Member         string

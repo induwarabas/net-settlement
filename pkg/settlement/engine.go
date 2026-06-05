@@ -23,6 +23,10 @@ type trade struct {
 	QuoteQuantity     *big.Int
 	RemainingBaseQty  *big.Int
 	RemainingQuoteQty *big.Int
+	BaseDust          *big.Int
+	QuoteDust         *big.Int
+	BasePrecision     int
+	QuotePrecision    int
 }
 
 type assetLiability struct {
@@ -107,9 +111,24 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 	for i, trd := range trades {
 		m.originalTrades = append(m.originalTrades, trd)
 
-		quantity := fromDecimal(trd.Quantity())
+		baseAsset := assetMap[trd.BaseAsset()]
+		quoteAsset := assetMap[trd.QuoteAsset()]
+		if baseAsset == nil {
+			return fmt.Errorf("asset reference data missing for base asset: %s", trd.BaseAsset())
+		}
+		if quoteAsset == nil {
+			return fmt.Errorf("asset reference data missing for quote asset: %s", trd.QuoteAsset())
+		}
+
+		basePrecision := baseAsset.Precision()
+		quotePrecision := quoteAsset.Precision()
+		baseDust := fromDecimal(baseAsset.DustThreshold())
+		quoteDust := fromDecimal(quoteAsset.DustThreshold())
+
+		quantity := roundToPrecision(fromDecimal(trd.Quantity()), basePrecision, roundDown)
 		price := fromDecimal(trd.Price())
-		quoteQty := multiply(quantity, price)
+		quoteQty := roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
+
 		m.trades = append(m.trades, &trade{
 			TradeId:           i,
 			Buyer:             m.memberId(trd.Buyer()),
@@ -121,6 +140,10 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 			QuoteQuantity:     new(big.Int).Set(quoteQty),
 			RemainingBaseQty:  new(big.Int).Set(quantity),
 			RemainingQuoteQty: new(big.Int).Set(quoteQty),
+			BaseDust:          baseDust,
+			QuoteDust:         quoteDust,
+			BasePrecision:     basePrecision,
+			QuotePrecision:    quotePrecision,
 		})
 	}
 
@@ -145,7 +168,11 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		if !k {
 			continue
 		}
-		balance := fromDecimal(entry.Balance())
+		ast := assetMap[entry.Asset()]
+		if ast == nil {
+			return fmt.Errorf("asset reference data missing for ledger asset: %s", entry.Asset())
+		}
+		balance := roundToPrecision(fromDecimal(entry.Balance()), ast.Precision(), roundDown)
 		m.ledger[memberId][assetId].Set(balance)
 		m.netting[memberId][assetId].Set(balance)
 	}
@@ -269,32 +296,40 @@ func (m *engine) runIteration() bool {
 // corresponding netting entries. When base is true, qty is denominated in the
 // base asset and the quote amount is derived proportionally; otherwise qty is
 // denominated in the quote asset.
+//
+// Reversal amounts are snapped up to each asset's precision and post-call dust
+// constraints are enforced: if the would-be-settled portion drops below dust on
+// either side, the trade is fully reversed; if only the deferred portion is
+// sub-dust, the reversal is expanded until both deferred sides clear dust (or
+// to a full reversal if expansion would overrun what's left).
 func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	if trade.BaseQuantity.Sign() == 0 || trade.QuoteQuantity.Sign() == 0 {
 		return
 	}
-	var baseQty, quoteQty *big.Int
-	if base {
-		baseQty = qty
-		quoteQty = multiplyAndDivide(qty, trade.QuoteQuantity, trade.BaseQuantity)
-		// Ensure the non-driving side is never zero when the driving side is positive.
-		// A zero result from integer truncation would leave RemainingQuoteQty unchanged,
-		// causing the line-314 recalculation to restore it to the original value and the
-		// trade to be misclassified as FULL.
-		if quoteQty.Sign() == 0 && qty.Sign() > 0 {
-			quoteQty = big.NewInt(1)
-		}
-	} else {
-		quoteQty = qty
-		baseQty = multiplyAndDivide(qty, trade.BaseQuantity, trade.QuoteQuantity)
-		// Same guard for the base side: a zero result means RemainingBaseQty is never
-		// decremented, so the trade appears to fully settle and stops blocking FIFO.
-		if baseQty.Sign() == 0 && qty.Sign() > 0 {
-			baseQty = big.NewInt(1)
-		}
+	if qty.Sign() <= 0 {
+		return
 	}
 
-	// Clamp to avoid over-reversing in the rare case where minimum-1 exceeds what remains.
+	baseQty, quoteQty := m.derivePair(trade, qty, base)
+
+	// Round each side up to its asset's precision so the reversal cannot leave
+	// fractional digits beyond what the asset supports.
+	baseQty = roundToPrecision(baseQty, m.assets[trade.BaseAsset].Precision(), roundUp)
+	quoteQty = roundToPrecision(quoteQty, m.assets[trade.QuoteAsset].Precision(), roundUp)
+
+	// Guard against the non-driving side rounding away to zero: a zero result
+	// would not decrement the corresponding RemainingQty, breaking classification
+	// and FIFO ordering downstream.
+	if baseQty.Sign() == 0 {
+		baseQty = precisionStep(m.assets[trade.BaseAsset].Precision())
+	}
+	if quoteQty.Sign() == 0 {
+		quoteQty = precisionStep(m.assets[trade.QuoteAsset].Precision())
+	}
+
+	baseQty, quoteQty = m.applyDustRules(trade, baseQty, quoteQty)
+
+	// Final clamp: never reverse more than what's left on the trade.
 	if baseQty.Cmp(trade.RemainingBaseQty) > 0 {
 		baseQty = new(big.Int).Set(trade.RemainingBaseQty)
 	}
@@ -309,6 +344,89 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	m.netting[trade.Seller][trade.BaseAsset].Add(m.netting[trade.Seller][trade.BaseAsset], baseQty)
 	m.netting[trade.Buyer][trade.QuoteAsset].Add(m.netting[trade.Buyer][trade.QuoteAsset], quoteQty)
 	m.netting[trade.Seller][trade.QuoteAsset].Sub(m.netting[trade.Seller][trade.QuoteAsset], quoteQty)
+}
+
+// derivePair returns the (baseQty, quoteQty) reversal pair for the given driver
+// quantity. The non-driving side is derived from the trade's base/quote ratio.
+func (m *engine) derivePair(trade *trade, qty *big.Int, base bool) (*big.Int, *big.Int) {
+	if base {
+		return new(big.Int).Set(qty), multiplyAndDivide(qty, trade.QuoteQuantity, trade.BaseQuantity)
+	}
+	return multiplyAndDivide(qty, trade.BaseQuantity, trade.QuoteQuantity), new(big.Int).Set(qty)
+}
+
+// applyDustRules enforces the dust contract on a candidate reversal pair:
+//   - if the projected settled portion would be sub-dust on either side, escalate
+//     to a full reversal (settled = 0 on both sides);
+//   - else if the projected deferred portion would be sub-dust on either side,
+//     expand the reversal so cumulative deferral clears dust on both sides; if
+//     expansion would overrun what's left on the trade, fall through to a full
+//     reversal.
+func (m *engine) applyDustRules(trade *trade, baseQty, quoteQty *big.Int) (*big.Int, *big.Int) {
+	fullBase := new(big.Int).Set(trade.RemainingBaseQty)
+	fullQuote := new(big.Int).Set(trade.RemainingQuoteQty)
+
+	for iter := 0; iter < 2; iter++ {
+		newSettledBase := new(big.Int).Sub(trade.RemainingBaseQty, baseQty)
+		newSettledQuote := new(big.Int).Sub(trade.RemainingQuoteQty, quoteQty)
+		newDeferredBase := new(big.Int).Sub(trade.BaseQuantity, newSettledBase)
+		newDeferredQuote := new(big.Int).Sub(trade.QuoteQuantity, newSettledQuote)
+
+		if isBelowDust(newSettledBase, trade.BaseDust) || isBelowDust(newSettledQuote, trade.QuoteDust) {
+			return fullBase, fullQuote
+		}
+
+		if !isBelowDust(newDeferredBase, trade.BaseDust) && !isBelowDust(newDeferredQuote, trade.QuoteDust) {
+			return baseQty, quoteQty
+		}
+
+		// Deferred side dust: expand the reversal so cumulative deferral on the
+		// offending side(s) reaches the dust threshold. Pick the binding side and
+		// derive the other proportionally, then snap up to precision.
+		alreadyDeferredBase := new(big.Int).Sub(trade.BaseQuantity, trade.RemainingBaseQty)
+		alreadyDeferredQuote := new(big.Int).Sub(trade.QuoteQuantity, trade.RemainingQuoteQty)
+
+		needBase := new(big.Int).Sub(trade.BaseDust, alreadyDeferredBase)
+		if needBase.Sign() < 0 {
+			needBase.SetInt64(0)
+		}
+		needQuote := new(big.Int).Sub(trade.QuoteDust, alreadyDeferredQuote)
+		if needQuote.Sign() < 0 {
+			needQuote.SetInt64(0)
+		}
+		if needBase.Cmp(baseQty) < 0 {
+			needBase = new(big.Int).Set(baseQty)
+		}
+		if needQuote.Cmp(quoteQty) < 0 {
+			needQuote = new(big.Int).Set(quoteQty)
+		}
+
+		// Pick whichever side requires the larger proportional reversal.
+		quoteImpliedByBase := multiplyAndDivide(needBase, trade.QuoteQuantity, trade.BaseQuantity)
+		if quoteImpliedByBase.Cmp(needQuote) >= 0 {
+			baseQty = roundToPrecision(needBase, trade.BasePrecision, roundUp)
+			quoteQty = roundToPrecision(
+				multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity),
+				trade.QuotePrecision, roundUp)
+		} else {
+			quoteQty = roundToPrecision(needQuote, trade.QuotePrecision, roundUp)
+			baseQty = roundToPrecision(
+				multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity),
+				trade.BasePrecision, roundUp)
+		}
+		if baseQty.Sign() == 0 {
+			baseQty = precisionStep(trade.BasePrecision)
+		}
+		if quoteQty.Sign() == 0 {
+			quoteQty = precisionStep(trade.QuotePrecision)
+		}
+
+		if baseQty.Cmp(fullBase) >= 0 || quoteQty.Cmp(fullQuote) >= 0 {
+			return fullBase, fullQuote
+		}
+	}
+	// Defensive: if two iterations couldn't satisfy dust, fall back to a full reversal.
+	return fullBase, fullQuote
 }
 
 // run executes the full settlement pipeline: netting, iterative deficit
@@ -340,18 +458,23 @@ func (m *engine) run() Results {
 
 	for j, trd := range m.trades {
 		originalTrade := m.originalTrades[j]
-		trd.RemainingQuoteQty = multiplyAndDivide(trd.QuoteQuantity, trd.RemainingBaseQty, trd.BaseQuantity)
+
+		deferredBase := new(big.Int).Sub(trd.BaseQuantity, trd.RemainingBaseQty)
+		deferredQuote := new(big.Int).Sub(trd.QuoteQuantity, trd.RemainingQuoteQty)
+
 		status := TradeResultStatusPartial
-		if trd.RemainingBaseQty.Sign() == 0 || trd.RemainingQuoteQty.Sign() == 0 {
-			trd.RemainingQuoteQty = big.NewInt(0)
+		switch {
+		case isBelowDust(trd.RemainingBaseQty, trd.BaseDust) || isBelowDust(trd.RemainingQuoteQty, trd.QuoteDust) ||
+			trd.RemainingBaseQty.Sign() == 0 || trd.RemainingQuoteQty.Sign() == 0:
+			// Settled side is sub-dust (or exactly zero) -> defer the whole trade.
 			trd.RemainingBaseQty = big.NewInt(0)
+			trd.RemainingQuoteQty = big.NewInt(0)
 			status = TradeResultStatusDeferred
-		} else if trd.RemainingBaseQty.Cmp(trd.BaseQuantity) == 0 || trd.RemainingQuoteQty.Cmp(trd.QuoteQuantity) == 0 {
-			trd.RemainingQuoteQty = new(big.Int).Set(trd.QuoteQuantity)
+		case (deferredBase.Sign() == 0 || isBelowDust(deferredBase, trd.BaseDust)) &&
+			(deferredQuote.Sign() == 0 || isBelowDust(deferredQuote, trd.QuoteDust)):
+			// Deferred side is sub-dust on both sides -> settle in full.
 			trd.RemainingBaseQty = new(big.Int).Set(trd.BaseQuantity)
-			if trd.RemainingBaseQty.Sign() == 0 || trd.RemainingQuoteQty.Sign() == 0 {
-				fmt.Println("Can't be")
-			}
+			trd.RemainingQuoteQty = new(big.Int).Set(trd.QuoteQuantity)
 			status = TradeResultStatusFull
 		}
 
@@ -372,22 +495,23 @@ func (m *engine) run() Results {
 
 	for member := 0; member < len(m.members); member++ {
 		for asset := 0; asset < len(m.assets); asset++ {
+			precision := m.assets[asset].Precision()
 			diff := new(big.Int).Sub(m.netting[member][asset], m.ledger[member][asset])
-			netAmount := toDecimal(new(big.Int).Abs(diff))
-			if netAmount.Sign() == 0 {
+			absDiff := roundToPrecision(new(big.Int).Abs(diff), precision, roundDown)
+			if absDiff.Sign() == 0 {
 				continue
 			}
 
-			direction := InstructionDirectionCredit
+			direction := InstructionDirection_In
 			if diff.Sign() < 0 {
-				direction = InstructionDirectionDebit
+				direction = InstructionDirection_Out
 			}
 
 			instructions = append(instructions, &Instruction{
 				Member:         m.members[member],
 				Asset:          m.assets[asset].Symbol(),
 				OpeningBalance: toDecimal(m.ledger[member][asset]),
-				NetAmount:      toDecimal(new(big.Int).Abs(diff)),
+				NetAmount:      toDecimal(absDiff),
 				Direction:      direction,
 				ClosingBalance: toDecimal(m.netting[member][asset]),
 			})
