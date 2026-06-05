@@ -44,13 +44,22 @@ type tradeInfo struct {
 
 // settlementRow is a parsed row of trade-settlements.csv.
 type settlementRow struct {
-	tradeID         string
-	execTime        time.Time
-	base            string
-	quote           string
-	settledQty      decimal.Decimal
-	settledQuoteVal decimal.Decimal
-	status          string
+	tradeID          string
+	execTime         time.Time
+	base             string
+	quote            string
+	settledQty       decimal.Decimal
+	settledQuoteVal  decimal.Decimal
+	deferredQty      decimal.Decimal
+	deferredQuoteVal decimal.Decimal
+	status           string
+}
+
+// assetInfo carries the reference-data fields the validator needs about an
+// asset.
+type assetInfo struct {
+	precision int
+	dust      decimal.Decimal
 }
 
 // instructionRow is a parsed row of settlement-instructions.csv.
@@ -76,17 +85,41 @@ func main() {
 	slog.Info("Validating settlement output.", "input", inDir, "output", outDir)
 
 	trades := loadTradesCSV(filepath.Join(inDir, "trades.csv"))
+	assets := loadAssetsCSV(filepath.Join(inDir, "assets.csv"))
 	settlements := loadSettlementsCSV(filepath.Join(outDir, "trade-settlements.csv"))
 	instructions := loadInstructionsCSV(filepath.Join(outDir, "settlement-instructions.csv"))
 
-	errors := 0
-	errors += validateNetAmounts(trades, settlements, instructions)
-	errors += validateFIFO(trades, settlements)
+	checks := []struct {
+		name string
+		run  func() int
+	}{
+		{"Net amounts", func() int {
+			return validateNetAmounts(trades, settlements, instructions, assets)
+		}},
+		{"FIFO ordering", func() int {
+			return validateFIFO(trades, settlements)
+		}},
+		{"Dust thresholds", func() int {
+			return validateDust(settlements, assets)
+		}},
+	}
 
-	if errors == 0 {
-		slog.Info("All validations passed.")
+	total := 0
+	for i, c := range checks {
+		slog.Info("Running check.", "step", fmt.Sprintf("%d/%d", i+1, len(checks)), "check", c.name)
+		n := c.run()
+		if n == 0 {
+			slog.Info("Check passed.", "check", c.name)
+		} else {
+			slog.Error("Check failed.", "check", c.name, "errors", n)
+		}
+		total += n
+	}
+
+	if total == 0 {
+		slog.Info("All validations passed.", "checks", len(checks))
 	} else {
-		slog.Error("Validation failed.", "errors", errors)
+		slog.Error("Validation failed.", "errors", total)
 		os.Exit(1)
 	}
 }
@@ -134,13 +167,13 @@ func selectDataset(args []string) string {
 	return names[n-1]
 }
 
-// precision is the tolerance for net amount comparisons; it covers rounding
-// introduced by the engine's integer division in multiplyAndDivide.
-var precision = decimal.New(1, -4) // 0.0001
-
 // validateNetAmounts checks that the net settled trade amounts per member+asset
-// match the directions and amounts in the settlement instructions.
-func validateNetAmounts(trades map[string]*tradeInfo, settlements []*settlementRow, instructions []*instructionRow) int {
+// match the directions and amounts in the settlement instructions. The engine
+// rounds each instruction's NetAmount down to the asset's declared precision,
+// so the computed net is rounded the same way before comparison; a tolerance of
+// one precision step covers any sub-precision rounding drift between the two
+// independent accumulators.
+func validateNetAmounts(trades map[string]*tradeInfo, settlements []*settlementRow, instructions []*instructionRow, assets map[string]assetInfo) int {
 	net := make(map[memberAsset]decimal.Decimal)
 
 	for _, s := range settlements {
@@ -171,14 +204,32 @@ func validateNetAmounts(trades map[string]*tradeInfo, settlements []*settlementR
 	errors := 0
 
 	for k, netVal := range net {
-		absNet := netVal.Abs()
+		ai, ok := assets[k.asset]
+		if !ok {
+			slog.Error("Asset reference data not found in assets.csv.", "asset", k.asset)
+			errors++
+			continue
+		}
+		p := ai.precision
 
-		// Skip tiny amounts that are below the engine's rounding precision.
-		if absNet.LessThan(precision) {
-			if inst, exists := instrMap[k]; exists && inst.netAmount.GreaterThanOrEqual(precision) {
+		// Round the computed net down to the asset's precision and use one
+		// precision step as the comparison tolerance — matching how the engine
+		// emits instruction NetAmounts.
+		wantDir := "IN"
+		absNet := netVal
+		if netVal.IsNegative() {
+			wantDir = "OUT"
+			absNet = netVal.Neg()
+		}
+		wantAmt := absNet.Truncate(int32(p))
+		tol := decimal.New(1, int32(-p)) // 10^(-p)
+
+		if wantAmt.IsZero() {
+			if inst, exists := instrMap[k]; exists && inst.netAmount.GreaterThanOrEqual(tol) {
 				slog.Error("Instruction exists for negligible net trade movement.", "member", k.member, "asset", k.asset, "net", netVal, "instruction", inst.netAmount)
 				errors++
 			}
+			delete(instrMap, k)
 			continue
 		}
 
@@ -189,20 +240,13 @@ func validateNetAmounts(trades map[string]*tradeInfo, settlements []*settlementR
 			continue
 		}
 
-		wantDir := "IN"
-		wantAmt := netVal
-		if netVal.IsNegative() {
-			wantDir = "OUT"
-			wantAmt = netVal.Neg()
-		}
-
 		if inst.direction != wantDir {
 			slog.Error("Instruction direction mismatch.", "member", k.member, "asset", k.asset, "want", wantDir, "got", inst.direction)
 			errors++
 		}
 		diff := wantAmt.Sub(inst.netAmount).Abs()
-		if diff.GreaterThanOrEqual(precision) {
-			slog.Error("Instruction net amount mismatch.", "member", k.member, "asset", k.asset, "want", wantAmt, "got", inst.netAmount, "diff", diff)
+		if diff.GreaterThan(tol) {
+			slog.Error("Instruction net amount mismatch.", "member", k.member, "asset", k.asset, "want", wantAmt, "got", inst.netAmount, "diff", diff, "precision", p)
 			errors++
 		}
 
@@ -210,7 +254,14 @@ func validateNetAmounts(trades map[string]*tradeInfo, settlements []*settlementR
 	}
 
 	for k, inst := range instrMap {
-		if inst.netAmount.GreaterThanOrEqual(precision) {
+		ai, ok := assets[k.asset]
+		if !ok {
+			slog.Error("Asset reference data not found in assets.csv.", "asset", k.asset)
+			errors++
+			continue
+		}
+		tol := decimal.New(1, int32(-ai.precision))
+		if inst.netAmount.GreaterThanOrEqual(tol) {
 			slog.Error("Instruction with no corresponding trade activity.", "member", k.member, "asset", k.asset, "amount", inst.netAmount, "direction", inst.direction)
 			errors++
 		}
@@ -274,6 +325,96 @@ func validateFIFO(trades map[string]*tradeInfo, settlements []*settlementRow) in
 		}
 	}
 	return errors
+}
+
+// validateDust checks that every PARTIAL trade has settled and deferred amounts
+// at or above the dust threshold on both base and quote sides. A sub-dust
+// settled portion means the trade should have been fully deferred; a sub-dust
+// deferred portion means it should have settled in full. Both indicate the
+// engine's dust contract was violated.
+func validateDust(settlements []*settlementRow, assets map[string]assetInfo) int {
+	errors := 0
+	for _, s := range settlements {
+		if s.status != "PARTIAL" {
+			continue
+		}
+		base, ok := assets[s.base]
+		if !ok {
+			slog.Error("Asset reference data not found in assets.csv.", "asset", s.base, "tradeID", s.tradeID)
+			errors++
+			continue
+		}
+		quote, ok := assets[s.quote]
+		if !ok {
+			slog.Error("Asset reference data not found in assets.csv.", "asset", s.quote, "tradeID", s.tradeID)
+			errors++
+			continue
+		}
+
+		amounts := []struct {
+			side  string
+			asset string
+			val   decimal.Decimal
+			dust  decimal.Decimal
+		}{
+			{"settled base", s.base, s.settledQty, base.dust},
+			{"settled quote", s.quote, s.settledQuoteVal, quote.dust},
+			{"deferred base", s.base, s.deferredQty, base.dust},
+			{"deferred quote", s.quote, s.deferredQuoteVal, quote.dust},
+		}
+		for _, a := range amounts {
+			if a.val.LessThan(a.dust) {
+				slog.Error("Partial trade sub-dust amount.",
+					"tradeID", s.tradeID, "side", a.side, "asset", a.asset,
+					"amount", a.val, "dust", a.dust,
+				)
+				errors++
+			}
+		}
+	}
+	return errors
+}
+
+// loadAssetsCSV reads assets.csv (handling an optional UTF-8 BOM) into an
+// asset-symbol -> assetInfo map (precision + dust threshold).
+func loadAssetsCSV(path string) map[string]assetInfo {
+	f, err := os.Open(path)
+	if err != nil {
+		panic(fmt.Sprintf("open %s: %v", path, err))
+	}
+	defer f.Close()
+
+	buf := make([]byte, 3)
+	n, _ := f.Read(buf)
+	if !(n == 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF) {
+		f.Seek(0, io.SeekStart)
+	}
+
+	r := csv.NewReader(f)
+	r.LazyQuotes = true
+	r.Read() // skip header
+
+	out := make(map[string]assetInfo)
+	for {
+		row, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			panic(fmt.Sprintf("read %s: %v", path, err))
+		}
+		if len(row) < 3 {
+			continue
+		}
+		symbol := strings.TrimSpace(row[0])
+		dust := parseDecimal(row[1])
+		p, err := strconv.Atoi(strings.TrimSpace(row[2]))
+		if err != nil {
+			panic(fmt.Sprintf("parse precision for %s: %v", symbol, err))
+		}
+		out[symbol] = assetInfo{precision: p, dust: dust}
+	}
+	return out
 }
 
 // loadTradesCSV reads trades.csv (handling an optional UTF-8 BOM) into a
@@ -348,13 +489,15 @@ func loadSettlementsCSV(path string) []*settlementRow {
 		}
 
 		rows = append(rows, &settlementRow{
-			tradeID:         strings.TrimSpace(row[1]),
-			execTime:        ts,
-			base:            strings.TrimSpace(row[4]),
-			quote:           strings.TrimSpace(row[5]),
-			settledQty:      parseDecimal(row[10]),
-			settledQuoteVal: parseDecimal(row[11]),
-			status:          strings.TrimSpace(row[14]),
+			tradeID:          strings.TrimSpace(row[1]),
+			execTime:         ts,
+			base:             strings.TrimSpace(row[4]),
+			quote:            strings.TrimSpace(row[5]),
+			settledQty:       parseDecimal(row[10]),
+			settledQuoteVal:  parseDecimal(row[11]),
+			deferredQty:      parseDecimal(row[12]),
+			deferredQuoteVal: parseDecimal(row[13]),
+			status:           strings.TrimSpace(row[14]),
 		})
 	}
 	return rows
