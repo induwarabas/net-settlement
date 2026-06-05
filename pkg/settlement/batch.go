@@ -1,7 +1,6 @@
 package settlement
 
 import (
-	"fmt"
 	"sort"
 )
 
@@ -98,9 +97,6 @@ func (m *batchBuilder) root(x string) string {
 
 // memberAssetKey returns the canonical string key for a (member, asset) pair.
 func memberAssetKey(member, asset string) string {
-	if member == "M02_T1" && asset == "EUR" {
-		fmt.Println("here")
-	}
 	return member + "-" + asset
 }
 
@@ -132,10 +128,6 @@ func splitBatches(result *Result) Results {
 		buyerQuote := memberAssetKey(t.Buyer(), t.QuoteAsset())
 		sellerBase := memberAssetKey(t.Seller(), t.BaseAsset())
 		sellerQuote := memberAssetKey(t.Seller(), t.QuoteAsset())
-
-		if buyerBase == "M02_T1-EUR" || buyerQuote == "M02_T1-EUR" || sellerBase == "M02_T1-EUR" || sellerQuote == "M02_T1-EUR" {
-			fmt.Println("here")
-		}
 
 		uf.ensure(buyerBase)
 		uf.ensure(buyerQuote)

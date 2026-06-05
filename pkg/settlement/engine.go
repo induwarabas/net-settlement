@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
-	wrappers "settlement/cmd/main/wappers"
 	"sort"
 	"time"
 
@@ -147,12 +146,9 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		baseDust := fromDecimal(baseAsset.DustThreshold())
 		quoteDust := fromDecimal(quoteAsset.DustThreshold())
 
-		quantity := roundToPrecision(fromDecimal(trd.Quantity()), basePrecision, roundDown)
+		quantity := fromDecimal(trd.Quantity()) // roundToPrecision(fromDecimal(trd.Quantity()), basePrecision, roundDown)
 		price := fromDecimal(trd.Price())
-		quoteQty := roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
-		if quoteQty.Cmp(fromDecimal(trd.(*wrappers.TradeWrapper).Trade.QuoteValue)) != 0 {
-			fmt.Println("Quote value mismatch: ", trd.Quantity(), " * ", trd.Price(), " = ", toDecimal(quoteQty), " (", trd.(*wrappers.TradeWrapper).Trade.QuoteValue, ")")
-		}
+		quoteQty := multiply(quantity, price) // roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
 
 		m.trades = append(m.trades, &trade{
 			TradeId:           i,
@@ -197,7 +193,7 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		if ast == nil {
 			return fmt.Errorf("asset reference data missing for ledger asset: %s", entry.Asset())
 		}
-		balance := roundToPrecision(fromDecimal(entry.Balance()), ast.Precision(), roundDown)
+		balance := fromDecimal(entry.Balance()) // roundToPrecision(fromDecimal(entry.Balance()), ast.Precision(), roundDown)
 		m.ledger[memberId][assetId].Set(balance)
 		m.netting[memberId][assetId].Set(balance)
 	}
@@ -339,8 +335,8 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 
 	// Round each side up to its asset's precision so the reversal cannot leave
 	// fractional digits beyond what the asset supports.
-	baseQty = roundToPrecision(baseQty, m.assets[trade.BaseAsset].Precision(), roundUp)
-	quoteQty = roundToPrecision(quoteQty, m.assets[trade.QuoteAsset].Precision(), roundUp)
+	baseQty = baseQty   // roundToPrecision(baseQty, m.assets[trade.BaseAsset].Precision(), roundUp)
+	quoteQty = quoteQty // roundToPrecision(quoteQty, m.assets[trade.QuoteAsset].Precision(), roundUp)
 
 	// Guard against the non-driving side rounding away to zero: a zero result
 	// would not decrement the corresponding RemainingQty, breaking classification
@@ -429,15 +425,15 @@ func (m *engine) applyDustRules(trade *trade, baseQty, quoteQty *big.Int) (*big.
 		// Pick whichever side requires the larger proportional reversal.
 		quoteImpliedByBase := multiplyAndDivide(needBase, trade.QuoteQuantity, trade.BaseQuantity)
 		if quoteImpliedByBase.Cmp(needQuote) >= 0 {
-			baseQty = roundToPrecision(needBase, trade.BasePrecision, roundUp)
-			quoteQty = roundToPrecision(
-				multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity),
-				trade.QuotePrecision, roundUp)
+			baseQty = needBase                                                             //roundToPrecision(needBase, trade.BasePrecision, roundUp)
+			quoteQty = multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity) //roundToPrecision(
+			// multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity),
+			// trade.QuotePrecision, roundUp)
 		} else {
-			quoteQty = roundToPrecision(needQuote, trade.QuotePrecision, roundUp)
-			baseQty = roundToPrecision(
-				multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity),
-				trade.BasePrecision, roundUp)
+			quoteQty = needQuote                                                           //roundToPrecision(needQuote, trade.QuotePrecision, roundUp)
+			baseQty = multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity) //roundToPrecision(
+			//multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity),
+			//trade.BasePrecision, roundUp)
 		}
 		if baseQty.Sign() == 0 {
 			baseQty = precisionStep(trade.BasePrecision)
@@ -462,11 +458,11 @@ func (m *engine) run() Results {
 	startTime := time.Now().UnixNano()
 	m.calculateNetting()
 
-	m.printNettingTable(0)
+	// m.printNettingTable(0)
 	i := 1
 	for {
 		ok := m.runIteration()
-		m.printNettingTable(i)
+		// m.printNettingTable(i)
 		i += 1
 		if !ok {
 			break
@@ -474,7 +470,7 @@ func (m *engine) run() Results {
 	}
 
 	endTime := time.Now().UnixNano()
-	slog.Info("settlement instruction calculation complete.", "iterations", i, "time(ns)", endTime-startTime)
+	slog.Info("settlement instruction calculation complete.", "iterations", i-1, "time(ns)", endTime-startTime)
 
 	trades := make([]*TradeResult, 0)
 

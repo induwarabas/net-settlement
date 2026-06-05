@@ -68,7 +68,7 @@ The CLI takes a single optional argument — the path to the data folder. It def
 go run ./cmd/main
 
 # Run against a specific dataset
-go run ./cmd/main data-small-sample
+go run ./cmd/main small-sample
 ```
 
 Output files are written into the same folder:
@@ -82,7 +82,7 @@ After running the engine, validate the results against the input trades:
 
 ```bash
 go run ./cmd/validator           # validates ./data
-go run ./cmd/validator data-small-sample     # validates ./data-small-sample
+go run ./cmd/validator small-sample     # validates ./small-sample
 ```
 
 The validator checks:
@@ -117,7 +117,7 @@ go test ./...
 ## Common workflow
 
 ```bash
-go run ./cmd/main data-exactly-funded && go run ./cmd/validator data-exactly-funded
+go run ./cmd/main L06_Exactly_funded && go run ./cmd/validator L06_Exactly_funded
 ```
 
 This generates instructions for `data3/` and immediately validates them.
