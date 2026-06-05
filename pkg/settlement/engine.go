@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	wrappers "settlement/cmd/main/wappers"
 	"sort"
 	"time"
 
@@ -149,6 +150,9 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		quantity := roundToPrecision(fromDecimal(trd.Quantity()), basePrecision, roundDown)
 		price := fromDecimal(trd.Price())
 		quoteQty := roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
+		if quoteQty.Cmp(fromDecimal(trd.(*wrappers.TradeWrapper).Trade.QuoteValue)) != 0 {
+			fmt.Println("Quote value mismatch: ", trd.Quantity(), " * ", trd.Price(), " = ", toDecimal(quoteQty), " (", trd.(*wrappers.TradeWrapper).Trade.QuoteValue, ")")
+		}
 
 		m.trades = append(m.trades, &trade{
 			TradeId:           i,
@@ -458,9 +462,11 @@ func (m *engine) run() Results {
 	startTime := time.Now().UnixNano()
 	m.calculateNetting()
 
+	m.printNettingTable(0)
 	i := 1
 	for {
 		ok := m.runIteration()
+		m.printNettingTable(i)
 		i += 1
 		if !ok {
 			break
