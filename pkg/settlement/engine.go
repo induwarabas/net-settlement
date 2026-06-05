@@ -49,7 +49,7 @@ type engine struct {
 	tradeIndex        map[string]int
 	assetIndex        map[string]int
 	memberIndex       map[string]int
-	assets            []string
+	assets            []Asset
 	members           []string
 	assetLiability    [][]*assetLiability
 	negativeLocations []*location
@@ -95,12 +95,15 @@ func (m *engine) assetId(asset string) int {
 // init sorts trades by execution time, indexes all members and assets, seeds the
 // netting matrix from ledger balances, and builds per-member-asset liability
 // lists that the iterative resolver will walk in reverse (newest-first) order.
-func (m *engine) init(trades []Trade, ledger []LedgerEntry) {
+func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) error {
 	slog.Info("Initializing settlement engine")
 	sort.SliceStable(trades, func(i, j int) bool {
 		return trades[i].ExecTime() < trades[j].ExecTime()
 	})
-
+	assetMap := make(map[string]Asset)
+	for _, asset := range assets {
+		assetMap[asset.Symbol()] = asset
+	}
 	for i, trd := range trades {
 		m.originalTrades = append(m.originalTrades, trd)
 
@@ -151,9 +154,14 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry) {
 		m.members[id] = member
 	}
 
-	m.assets = make([]string, len(m.assetIndex))
+	m.assets = make([]Asset, len(m.assetIndex))
 	for asset, id := range m.assetIndex {
-		m.assets[id] = asset
+		ast := assetMap[asset]
+		if ast == nil {
+			fmt.Println("Asset reference data missing: ", asset, " (", id, ")")
+			return fmt.Errorf("asset reference data missing for asset: %s", asset)
+		}
+		m.assets[id] = ast
 	}
 
 	m.assetLiability = make([][]*assetLiability, len(m.memberIndex))
@@ -179,6 +187,7 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry) {
 		}
 	}
 	slog.Info("Settlement engine initialized.", "trades", len(m.trades), "members", len(m.members), "assets", len(m.assets))
+	return nil
 }
 
 // calculateNetting applies every trade's full quantity to the netting matrix.
@@ -376,7 +385,7 @@ func (m *engine) run() Results {
 
 			instructions = append(instructions, &Instruction{
 				Member:         m.members[member],
-				Asset:          m.assets[asset],
+				Asset:          m.assets[asset].Symbol(),
 				OpeningBalance: toDecimal(m.ledger[member][asset]),
 				NetAmount:      toDecimal(new(big.Int).Abs(diff)),
 				Direction:      direction,
@@ -514,7 +523,11 @@ func (m *engine) printNettingTable(index int) error {
 	w := csv.NewWriter(f)
 	defer w.Flush()
 
-	header := append([]string{"member"}, m.assets...)
+	symbols := make([]string, 0, len(m.assets))
+	for _, asset := range m.assets {
+		symbols = append(symbols, asset.Symbol())
+	}
+	header := append([]string{"member"}, symbols...)
 	if err := w.Write(header); err != nil {
 		return err
 	}

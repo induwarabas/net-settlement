@@ -4,7 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
-	"settlement/cmd/main/loader"
+	"settlement/cmd/main/wappers"
 	"settlement/pkg/settlement"
 	"sort"
 	"time"
@@ -77,7 +77,7 @@ func WriteTradeDetail(path string, results settlement.Results) {
 	for i, batch := range results.Batches {
 		batchLabel := fmt.Sprintf("%d", i+1)
 		for _, r := range batch.Trades {
-			t := r.Trade.(*loader.Trade)
+			t := r.Trade.(*wrappers.TradeWrapper)
 			w.Write([]string{
 				batchLabel,
 				t.TradeID(),
@@ -99,7 +99,7 @@ func WriteTradeDetail(path string, results settlement.Results) {
 	}
 
 	for _, trade := range results.Deferred {
-		t := trade.(*loader.Trade)
+		t := trade.(*wrappers.TradeWrapper)
 		qty := t.Quantity()
 		quoteVal := t.QuoteValue()
 		w.Write([]string{
