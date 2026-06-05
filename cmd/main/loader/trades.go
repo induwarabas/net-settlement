@@ -11,56 +11,16 @@ import (
 )
 
 type Trade struct {
-	tradeID    string
-	execTime   time.Time
-	pair       string
-	base       string
-	quote      string
-	quantity   decimal.Decimal
-	price      decimal.Decimal
-	quoteValue decimal.Decimal
-	buyMember  string
-	sellMember string
-}
-
-func (t *Trade) ExecTime() int64 {
-	return int64(t.execTime.UnixNano())
-}
-
-func (t *Trade) Buyer() string {
-	return t.buyMember
-}
-
-func (t *Trade) Seller() string {
-	return t.sellMember
-}
-
-func (t *Trade) BaseAsset() string {
-	return t.base
-}
-
-func (t *Trade) QuoteAsset() string {
-	return t.quote
-}
-
-func (t *Trade) Quantity() decimal.Decimal {
-	return t.quantity
-}
-
-func (t *Trade) Price() decimal.Decimal {
-	return t.price
-}
-
-func (t *Trade) TradeID() string {
-	return t.tradeID
-}
-
-func (t *Trade) QuoteValue() decimal.Decimal {
-	return t.quoteValue
-}
-
-func (t *Trade) Pair() string {
-	return t.pair
+	TradeID    string
+	ExecTime   time.Time
+	Pair       string
+	Base       string
+	Quote      string
+	Quantity   decimal.Decimal
+	Price      decimal.Decimal
+	QuoteValue decimal.Decimal
+	BuyMember  string
+	SellMember string
 }
 
 func LoadTrades(path string) []*Trade {
@@ -110,16 +70,16 @@ func LoadTrades(path string) []*Trade {
 		}
 
 		list = append(list, &Trade{
-			tradeID:    row[0],
-			execTime:   ts,
-			pair:       row[2],
-			base:       row[3],
-			quote:      row[4],
-			quantity:   strToDecimal(row[5]),
-			price:      strToDecimal(row[6]),
-			quoteValue: strToDecimal(row[7]),
-			buyMember:  row[8],
-			sellMember: row[11],
+			TradeID:    row[0],
+			ExecTime:   ts,
+			Pair:       row[2],
+			Base:       row[3],
+			Quote:      row[4],
+			Quantity:   strToDecimal(row[5]),
+			Price:      strToDecimal(row[6]),
+			QuoteValue: strToDecimal(row[7]),
+			BuyMember:  row[8],
+			SellMember: row[11],
 		})
 	}
 

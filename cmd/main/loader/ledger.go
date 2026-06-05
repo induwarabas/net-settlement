@@ -10,21 +10,9 @@ import (
 )
 
 type LedgerEntry struct {
-	member  string
-	asset   string
-	balance decimal.Decimal
-}
-
-func (l *LedgerEntry) Member() string {
-	return l.member
-}
-
-func (l *LedgerEntry) Asset() string {
-	return l.asset
-}
-
-func (l *LedgerEntry) Balance() decimal.Decimal {
-	return l.balance
+	Member  string
+	Asset   string
+	Balance decimal.Decimal
 }
 
 func LoadLedger(path string) []*LedgerEntry {
@@ -56,9 +44,9 @@ func LoadLedger(path string) []*LedgerEntry {
 		for i, asset := range assets {
 			if i+2 < len(row) && row[i+2] != "" {
 				entries = append(entries, &LedgerEntry{
-					member:  row[0],
-					asset:   asset,
-					balance: strToDecimal(row[i+2]),
+					Member:  row[0],
+					Asset:   asset,
+					Balance: strToDecimal(row[i+2]),
 				})
 			}
 		}
