@@ -74,13 +74,21 @@ type Instruction struct {
 type Result struct {
 	Instructions []*Instruction
 	Trades       []*TradeResult
+	Penalties    []*Penalty
+}
+
+type Penalty struct {
+	Member string
+	Asset  string
+	Amount decimal.Decimal
 }
 
 // Results is the full output of a settlement run: independent batches plus the
 // list of trades that could not be settled at all.
 type Results struct {
-	Batches  []*Result
-	Deferred []Trade
+	Batches   []*Result
+	Deferred  []Trade
+	Penalties []*Penalty
 }
 
 // LedgerEntry is the read-only view the engine needs of a single member-asset

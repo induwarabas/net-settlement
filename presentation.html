@@ -919,6 +919,67 @@ button.nav.secondary:hover:not(:disabled) {
 }
 .scenario-card .scenario-result strong { font-weight: 800; }
 
+/* Dust visual diagram (bar + dust zones + cut line) */
+.dust-diagram {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto 16px;
+  background: var(--bg-0);
+  border-radius: 10px;
+  padding: 6px 4px;
+  border: 1px solid var(--line);
+}
+.diagram-intro {
+  background: linear-gradient(135deg, var(--indigo-soft), var(--cyan-soft));
+  border: 1px solid rgba(79,70,229,0.18);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.diagram-intro h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--indigo);
+  margin-bottom: 6px;
+}
+.diagram-intro p {
+  font-size: 13px;
+  color: var(--text-1);
+  line-height: 1.55;
+  margin-bottom: 12px;
+}
+.diagram-intro p:last-child { margin-bottom: 0; }
+.diagram-intro .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.diagram-intro .legend .swatch {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  vertical-align: middle;
+  margin-right: 6px;
+  border: 1.5px solid #334155;
+  border-radius: 2px;
+}
+.diagram-intro .legend .swatch.dust {
+  background-image: repeating-linear-gradient(45deg, #cbd5e1 0 2px, transparent 2px 5px);
+}
+.diagram-intro .legend .swatch.safe { background: white; }
+.diagram-intro .legend .cut-line {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: repeating-linear-gradient(to bottom, #0f172a 0 4px, transparent 4px 7px);
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
 /* Dust check grid */
 .dust-check {
   display: grid;
@@ -1659,6 +1720,241 @@ function drawSketchArrow(svg, x1, y1, x2, y2, color, opts = {}) {
   svg.appendChild(head);
 }
 
+function svgEl(tag, attrs = {}, children = []) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+
+function renderDustDiagram(state, idSuffix = '') {
+  // state: 'ok' | 'defer' | 'widen'
+  const W = 720, H = 230;
+  const barX = 70, barW = 580, barH = 38;
+  // Different dust widths per asset (BTC dust = 2.94e-6 is tiny; USDT dust = 0.01 is much larger)
+  const btcDustW = 24;
+  const usdtDustW = 72;
+  const btcY = 56, usdtY = 138;
+  const cutTop = 36, cutBottom = 196;
+
+  // Bar coords:
+  //  BTC dust zones:  70..94   (left) · 626..650 (right) · safe 94..626
+  //  USDT dust zones: 70..142  (left) · 578..650 (right) · safe 142..578
+  //  Combined safe: 142..578  (USDT is the binding constraint)
+  const cutPositions = {
+    ok:    360,                          // safely in 142..578 — both assets above dust
+    defer: barX + 50,                    // 120 — inside USDT left dust zone (70..142), BTC safe
+    widen: 605                           // inside USDT right dust (BTC safe) — deferred USDT sub-dust
+  };
+  const cutAt = cutPositions[state];
+  // Adjusted cut sits exactly on USDT's right dust threshold boundary — the minimum widening that clears dust on both assets.
+  const adjustedCut = state === 'widen' ? (barX + barW - usdtDustW) : null;
+
+  const labels = {
+    ok:    { text: 'OK · can split here',                color: '#059669' },
+    defer: { text: 'Can\'t split · defer the entire trade', color: '#dc2626' },
+    widen: { text: 'Can\'t split · drag to splittable area', color: '#d97706' }
+  };
+  const label = labels[state];
+
+  const root = svgEl('svg', {
+    viewBox: `0 0 ${W} ${H}`,
+    class: 'dust-diagram',
+    preserveAspectRatio: 'xMidYMid meet'
+  });
+
+  // Hatch pattern for dust zones
+  const patternId = 'dust-hatch-' + state + idSuffix;
+  const defs = svgEl('defs');
+  const pattern = svgEl('pattern', {
+    id: patternId,
+    patternUnits: 'userSpaceOnUse',
+    width: 7, height: 7,
+    patternTransform: 'rotate(45)'
+  });
+  pattern.appendChild(svgEl('line', {
+    x1: 0, y1: 0, x2: 0, y2: 7,
+    stroke: '#94a3b8', 'stroke-width': '1.4'
+  }));
+  defs.appendChild(pattern);
+  root.appendChild(defs);
+
+  // Asset bars — each with its own dust width
+  for (const [name, yPos, dustW, dustValue] of [
+    ['BTC',  btcY,  btcDustW,  '0.00000294'],
+    ['USDT', usdtY, usdtDustW, '0.01']
+  ]) {
+    // Asset name
+    root.appendChild(svgEl('text', {
+      x: 22, y: yPos + barH / 2 + 5,
+      'font-family': 'Inter, sans-serif',
+      'font-size': '13',
+      'font-weight': '700',
+      fill: '#334155'
+    }, name));
+    // Main bar outline
+    root.appendChild(svgEl('rect', {
+      x: barX, y: yPos, width: barW, height: barH,
+      fill: 'white', stroke: '#334155', 'stroke-width': '2', rx: '4'
+    }));
+    // Left dust zone
+    root.appendChild(svgEl('rect', {
+      x: barX, y: yPos, width: dustW, height: barH,
+      fill: `url(#${patternId})`, stroke: '#334155', 'stroke-width': '2'
+    }));
+    // Right dust zone
+    root.appendChild(svgEl('rect', {
+      x: barX + barW - dustW, y: yPos, width: dustW, height: barH,
+      fill: `url(#${patternId})`, stroke: '#334155', 'stroke-width': '2'
+    }));
+    // Dust value tag inside the left dust zone (only if wide enough)
+    if (dustW >= 50) {
+      root.appendChild(svgEl('text', {
+        x: barX + dustW / 2, y: yPos + barH / 2 + 4,
+        'text-anchor': 'middle',
+        'font-family': 'Inter, sans-serif',
+        'font-size': '9',
+        'font-weight': '700',
+        fill: '#475569'
+      }, '≈ ' + dustValue));
+    }
+  }
+
+  // Primary cut line (red dashed for defer/widen, green dashed for ok)
+  const primaryColor = state === 'ok' ? '#059669' : '#dc2626';
+  root.appendChild(svgEl('line', {
+    x1: cutAt, y1: cutTop, x2: cutAt, y2: cutBottom,
+    stroke: primaryColor,
+    'stroke-width': '2.5',
+    'stroke-dasharray': '7 4',
+    'stroke-linecap': 'round'
+  }));
+
+  // For widen: draw the green adjusted cut line + STRAIGHT drag arrow from red to green
+  if (state === 'widen' && adjustedCut != null) {
+    root.appendChild(svgEl('line', {
+      x1: adjustedCut, y1: cutTop, x2: adjustedCut, y2: cutBottom,
+      stroke: '#059669',
+      'stroke-width': '2.5',
+      'stroke-dasharray': '7 4',
+      'stroke-linecap': 'round'
+    }));
+    // Straight horizontal drag arrow pointing LEFT (from red cut toward green cut)
+    const arrowY = 24;
+    const arrowFromX = cutAt + 6;       // just right of red cut
+    const arrowToX = adjustedCut + 4;   // tip just right of green cut so arrowhead is visible
+    root.appendChild(svgEl('line', {
+      x1: arrowFromX, y1: arrowY, x2: arrowToX, y2: arrowY,
+      stroke: '#d97706',
+      'stroke-width': '3',
+      'stroke-linecap': 'round',
+      opacity: '0.95'
+    }));
+    // Arrowhead — wings on the right side, tip on the left, matching the horizontal direction
+    root.appendChild(svgEl('path', {
+      d: `M ${arrowToX + 11} ${arrowY - 7} L ${arrowToX} ${arrowY} L ${arrowToX + 11} ${arrowY + 7}`,
+      stroke: '#d97706',
+      'stroke-width': '3',
+      fill: 'none',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round'
+    }));
+    // Small Caveat label above the drag arrow, with arrow direction now matching the actual motion
+    root.appendChild(svgEl('text', {
+      x: (arrowFromX + arrowToX) / 2, y: 12,
+      'text-anchor': 'middle',
+      'font-family': 'Caveat, cursive',
+      'font-size': '14',
+      'font-weight': '700',
+      fill: '#d97706'
+    }, 'widen the cut ←'));
+  }
+
+  // Scissors below the final cut (adjusted for widen, primary otherwise)
+  const scissorsX = state === 'widen' ? adjustedCut : cutAt;
+  root.appendChild(svgEl('text', {
+    x: scissorsX, y: 218,
+    'text-anchor': 'middle',
+    'font-size': '24'
+  }, '✂'));
+
+  // For defer: short left-pointing arrow above the bar, with clear gaps from both cut and label
+  //   cut          | arrow tip ←———— arrow tail | label "Can't split · …"
+  //   x=cutAt      | x=cutAt+35   x=cutAt+115   | x=cutAt+130 …
+  if (state === 'defer') {
+    const arrowY = 18;
+    const fromX = cutAt + 115;
+    const toX = cutAt + 35;
+    root.appendChild(svgEl('line', {
+      x1: fromX, y1: arrowY, x2: toX, y2: arrowY,
+      stroke: '#dc2626',
+      'stroke-width': '2.6',
+      'stroke-linecap': 'round',
+      opacity: '0.9'
+    }));
+    root.appendChild(svgEl('path', {
+      d: `M ${toX + 8} ${arrowY - 5} L ${toX} ${arrowY} L ${toX + 8} ${arrowY + 5}`,
+      stroke: '#dc2626',
+      'stroke-width': '2.6',
+      fill: 'none',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round'
+    }));
+  }
+
+  // "Dust threshold" annotation — short diagonal arrow pointing at BTC's left dust zone (top-left corner)
+  root.appendChild(svgEl('text', {
+    x: 12, y: 18,
+    'font-family': 'Inter, sans-serif',
+    'font-size': '11',
+    fill: '#64748b',
+    'font-weight': '600'
+  }, 'Dust threshold'));
+  root.appendChild(svgEl('path', {
+    d: `M 82 24 L 80 ${btcY - 4}`,
+    stroke: '#64748b',
+    'stroke-width': '1.3',
+    fill: 'none',
+    'stroke-linecap': 'round'
+  }));
+  root.appendChild(svgEl('path', {
+    d: `M 75 ${btcY - 10} L 80 ${btcY - 4} L 85 ${btcY - 8}`,
+    stroke: '#64748b',
+    'stroke-width': '1.3',
+    fill: 'none',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round'
+  }));
+
+  // Status label position depends on where the action is:
+  //  defer → place right next to the rolling-back arrow (top, near the cut)
+  //  widen / ok → top-right
+  let labelX, labelAnchor;
+  if (state === 'defer') {
+    labelX = cutAt + 135;        // 20px past the rolling-back arrow's tail (which ends at cutAt+115)
+    labelAnchor = 'start';
+  } else if (state === 'widen') {
+    labelX = 100;                // top-left, well away from the right-side drag/cut action
+    labelAnchor = 'start';
+  } else {
+    labelX = W - 16;             // ok scenario — top-right
+    labelAnchor = 'end';
+  }
+  root.appendChild(svgEl('text', {
+    x: labelX, y: 24,
+    'font-family': 'Caveat, cursive',
+    'font-size': '22',
+    'font-weight': '700',
+    fill: label.color,
+    'text-anchor': labelAnchor
+  }, label.text));
+
+  return root;
+}
+
 function renderDeltaMatrix(deltaMx) {
   const wrap = el('div', { class: 'matrix-wrap' });
   const table = el('table', { class: 'matrix delta-matrix' });
@@ -1753,7 +2049,7 @@ function renderBalanceChanges(beforeMx, afterMx, opts = {}) {
     ? { cells: resolvedCells, label: '<span class="emoji">✓</span>Resolved! Deficit cleared', color: 'emerald' }
     : null;
   const resultBottomLabel = newDeficitCells.length > 0
-    ? { cells: newDeficitCells, label: '<span class="emoji">⚠</span>Newly generated deficit — handled in next iteration', color: 'red' }
+    ? { cells: newDeficitCells, label: '<span class="emoji">⚠</span>New deficit — handled next iteration · <em>not penalized</em>', color: 'red' }
     : null;
 
   wrap.appendChild(renderMatrix({
@@ -2026,9 +2322,24 @@ const STEPS = [
       v.appendChild(el('div', { class: 'viz-subtitle' }, 'Each cell shows opening → net position after every trade flow is applied'));
       const opening = openingMatrix();
       const netted = fullyNettedMatrix();
-      v.appendChild(renderMatrix({ matrix: netted, openingMx: opening }));
+
+      // Collect the initial deficit cells — these are the ones the penalty logic charges against
+      const deficitCells = [];
+      for (const m of MEMBERS) for (const a of ASSETS) {
+        if (netted[m][a] < 0) deficitCells.push(`${m}.${a}`);
+      }
+
+      v.appendChild(renderMatrix({
+        matrix: netted,
+        openingMx: opening,
+        topLabel: deficitCells.length > 0 ? {
+          cells: deficitCells,
+          label: '<span class="emoji">💸</span>Initial deficits — these will be <em>penalized</em>',
+          color: 'red'
+        } : null
+      }));
       const insight = el('div', { class: 'insight' });
-      insight.innerHTML = '<strong>Four cells are negative.</strong> These members agreed to deliver more than they own (or will receive). They are the deficits that need resolving.';
+      insight.innerHTML = '<strong>Four cells are negative.</strong> These members agreed to deliver more than they own (or will receive). They are the deficits that need resolving — and only this <em>initial</em> set is what the penalty logic charges against. Anything new that appears during later iterations is treated as fallout, not as a fresh penalty.';
       v.appendChild(insight);
       return v;
     },
@@ -2135,7 +2446,7 @@ const STEPS = [
       v.appendChild(renderBalanceChanges(before, after, { target: 'Dave.BTC' }));
 
       const insight = el('div', { class: 'insight' });
-      insight.innerHTML = '<strong>New deficit alert:</strong> reversing T2 also pulls 15 ETH back from Dave. Look for the <code>⚠ new deficit</code> badge on <code>Dave · ETH</code> — the engine will iterate again to clean it up.';
+      insight.innerHTML = '<strong>New deficit alert:</strong> reversing T2 also pulls 15 ETH back from Dave. Look for the <code>⚠ new deficit</code> badge on <code>Dave · ETH</code> — the engine will iterate again to clean it up. <strong>Note:</strong> this new deficit is <em>cascade fallout</em>, not part of the original deficit set, so it is <strong>not penalized</strong>.';
       v.appendChild(insight);
 
       return v;
@@ -2156,6 +2467,21 @@ const STEPS = [
       v.appendChild(el('div', { class: 'viz-title' }, 'Dust threshold rules'));
       v.appendChild(el('div', { class: 'viz-subtitle' }, 'Reversals must never leave sub-dust amounts on either side. Two illustrative scenarios using BTC (dust 0.00000294) and USDT (dust 0.01).'));
 
+      // ============ Visual intro: the trade-log model ============
+      const intro = el('div', { class: 'diagram-intro' });
+      intro.innerHTML = '<h3>Think of a trade as a log with dust zones on each end</h3>' +
+        '<p>Each asset has a <strong>dust threshold</strong> — the smallest amount worth moving. ' +
+        'To partial-settle, the engine "cuts" the trade into a <em>settled</em> portion (left) and a <em>deferred</em> portion (right). ' +
+        'The cut must land in the safe middle so both sides clear dust on both BTC and USDT.</p>';
+      intro.appendChild(renderDustDiagram('ok', '-intro'));
+      const legend = el('div', { class: 'legend' });
+      legend.innerHTML =
+        '<span><span class="swatch dust"></span>Dust zone (sub-dust)</span>' +
+        '<span><span class="swatch safe"></span>Safe zone (above dust on both assets)</span>' +
+        '<span><span class="cut-line"></span>Cut between settled / deferred portions</span>';
+      intro.appendChild(legend);
+      v.appendChild(intro);
+
       // ============ Scenario A: settled too small → defer ============
       const sa = el('div', { class: 'scenario-card' });
       const saHeader = el('div', { class: 'scenario-header' });
@@ -2163,6 +2489,7 @@ const STEPS = [
       saHeader.appendChild(el('span', { class: 'scenario-title' }, 'Settled side would be too small'));
       sa.appendChild(saHeader);
       sa.appendChild(el('div', { class: 'scenario-subtitle' }, 'Hypothetical trade: Alice buys 1 BTC from Bob @ 10 USDT. Bob is short 0.9999 BTC.'));
+      sa.appendChild(renderDustDiagram('defer', '-a'));
 
       const saMath = el('div', { class: 'math-card', style: 'margin-bottom:0' });
       saMath.appendChild(el('h3', {}, '⊘  Naive partial reversal'));
@@ -2206,6 +2533,7 @@ const STEPS = [
       sbHeader.appendChild(el('span', { class: 'scenario-title' }, 'Deferred side would be too small'));
       sb.appendChild(sbHeader);
       sb.appendChild(el('div', { class: 'scenario-subtitle' }, 'Same trade, but Bob is short only 0.0001 BTC.'));
+      sb.appendChild(renderDustDiagram('widen', '-b'));
 
       const sbMath = el('div', { class: 'math-card', style: 'margin-bottom:0' });
       sbMath.appendChild(el('h3', {}, '⊘  Naive partial reversal'));
@@ -2456,74 +2784,7 @@ const STEPS = [
     }
   },
 
-  // ----- 10: INSTRUCTIONS -----
-  {
-    name: 'Instructions',
-    render() {
-      const v = el('div');
-      v.appendChild(el('div', { class: 'viz-title' }, 'Emit settlement instructions'));
-      v.appendChild(el('div', { class: 'viz-subtitle' }, 'For every (member, asset) where opening ≠ closing, write one IN or OUT instruction.'));
-
-      const stats = el('div', { class: 'stats' });
-      const s1 = el('div', { class: 'stat-card total' });
-      s1.appendChild(el('div', { class: 'val' }, '22'));
-      s1.appendChild(el('div', { class: 'lbl' }, 'Instructions'));
-      stats.appendChild(s1);
-      let inCount = 0, outCount = 0;
-      BATCHES.forEach(b => b.instructions.forEach(i => i.direction === 'IN' ? inCount++ : outCount++));
-      const s2 = el('div', { class: 'stat-card full' });
-      s2.appendChild(el('div', { class: 'val' }, String(inCount)));
-      s2.appendChild(el('div', { class: 'lbl' }, 'IN'));
-      stats.appendChild(s2);
-      const s3 = el('div', { class: 'stat-card' });
-      s3.appendChild(el('div', { class: 'val', style: 'color:var(--blue)' }, String(outCount)));
-      s3.appendChild(el('div', { class: 'lbl' }, 'OUT'));
-      stats.appendChild(s3);
-      const s4 = el('div', { class: 'stat-card total' });
-      s4.appendChild(el('div', { class: 'val' }, '3'));
-      s4.appendChild(el('div', { class: 'lbl' }, 'Batches'));
-      stats.appendChild(s4);
-      v.appendChild(stats);
-
-      // Table merging all instructions with batch grouping
-      for (const batch of BATCHES) {
-        const hdr = el('div', { class: 'batch-header' });
-        hdr.appendChild(el('span', { class: 'name' }, 'Batch ' + batch.id));
-        hdr.appendChild(el('span', { class: 'meta' }, '· trades ' + batch.trades.join(', ') + ' · ' + batch.instructions.length + ' instructions'));
-        v.appendChild(hdr);
-
-        const t = el('table', { class: 'inst-table' });
-        const th = el('thead');
-        const thr = el('tr');
-        ['Member','Asset','Opening','Δ','Direction','Closing'].forEach(h => thr.appendChild(el('th', {}, h)));
-        th.appendChild(thr);
-        t.appendChild(th);
-        const tb = el('tbody');
-        for (const inst of batch.instructions) {
-          const tr = el('tr');
-          tr.appendChild(el('td', {}, inst.member));
-          tr.appendChild(el('td', {}, inst.asset));
-          tr.appendChild(el('td', { class: 'num' }, String(inst.opening)));
-          const dCls = inst.direction === 'IN' ? 'delta-in' : 'delta-out';
-          tr.appendChild(el('td', { class: 'num ' + dCls }, (inst.direction === 'IN' ? '+' : '−') + inst.delta));
-          tr.appendChild(el('td', {}, el('span', { class: 'pill ' + inst.direction.toLowerCase() }, inst.direction)));
-          tr.appendChild(el('td', { class: 'num' }, String(inst.closing)));
-          tb.appendChild(tr);
-        }
-        t.appendChild(tb);
-        v.appendChild(t);
-      }
-      return v;
-    },
-    info: {
-      tag: 'STEP 5 · Instructions',
-      what: 'The engine recomputes the netting matrix using the <em>settled</em> quantities (not the original ones), then emits one instruction per non-zero net change.',
-      why: 'These are what actually moves on the ledger. <span class="pill in">IN</span> increases the holding; <span class="pill out">OUT</span> decreases it. Cells where opening equals closing produce no instruction — they\'re already balanced.',
-      detail: '<p>22 instructions total: 11 <span class="pill in">IN</span> and 11 <span class="pill out">OUT</span>. They balance because settlement moves value, doesn\'t create it.</p>'
-    }
-  },
-
-  // ----- 11: BATCH SPLITTING (SVG graph) -----
+  // ----- 10: BATCH SPLITTING (SVG graph) -----
   {
     name: 'Batch splitting',
     render() {
@@ -2661,10 +2922,77 @@ const STEPS = [
       return v;
     },
     info: {
-      tag: 'STEP 6 · Batch splitting',
+      tag: 'STEP 5 · Batch splitting',
       what: 'Trades are grouped into connected components using union-find over (member, asset) keys. Each component becomes one settlement batch.',
       why: 'Independent batches can settle in parallel: a hold or failure in Batch 1 doesn\'t freeze Batch 2 or 3. The 22 instructions move as <strong>three independent transfers</strong>, not one giant atomic operation.',
       detail: '<p><strong>Edges in the graph</strong> are trades; <strong>nodes</strong> are (member · asset) keys. Each subgraph is one maximal connected component.</p>'
+    }
+  },
+
+  // ----- 11: INSTRUCTIONS -----
+  {
+    name: 'Instructions',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Emit settlement instructions'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'For every (member, asset) where opening ≠ closing, write one IN or OUT instruction.'));
+
+      const stats = el('div', { class: 'stats' });
+      const s1 = el('div', { class: 'stat-card total' });
+      s1.appendChild(el('div', { class: 'val' }, '22'));
+      s1.appendChild(el('div', { class: 'lbl' }, 'Instructions'));
+      stats.appendChild(s1);
+      let inCount = 0, outCount = 0;
+      BATCHES.forEach(b => b.instructions.forEach(i => i.direction === 'IN' ? inCount++ : outCount++));
+      const s2 = el('div', { class: 'stat-card full' });
+      s2.appendChild(el('div', { class: 'val' }, String(inCount)));
+      s2.appendChild(el('div', { class: 'lbl' }, 'IN'));
+      stats.appendChild(s2);
+      const s3 = el('div', { class: 'stat-card' });
+      s3.appendChild(el('div', { class: 'val', style: 'color:var(--blue)' }, String(outCount)));
+      s3.appendChild(el('div', { class: 'lbl' }, 'OUT'));
+      stats.appendChild(s3);
+      const s4 = el('div', { class: 'stat-card total' });
+      s4.appendChild(el('div', { class: 'val' }, '3'));
+      s4.appendChild(el('div', { class: 'lbl' }, 'Batches'));
+      stats.appendChild(s4);
+      v.appendChild(stats);
+
+      // Table merging all instructions with batch grouping
+      for (const batch of BATCHES) {
+        const hdr = el('div', { class: 'batch-header' });
+        hdr.appendChild(el('span', { class: 'name' }, 'Batch ' + batch.id));
+        hdr.appendChild(el('span', { class: 'meta' }, '· trades ' + batch.trades.join(', ') + ' · ' + batch.instructions.length + ' instructions'));
+        v.appendChild(hdr);
+
+        const t = el('table', { class: 'inst-table' });
+        const th = el('thead');
+        const thr = el('tr');
+        ['Member','Asset','Opening','Δ','Direction','Closing'].forEach(h => thr.appendChild(el('th', {}, h)));
+        th.appendChild(thr);
+        t.appendChild(th);
+        const tb = el('tbody');
+        for (const inst of batch.instructions) {
+          const tr = el('tr');
+          tr.appendChild(el('td', {}, inst.member));
+          tr.appendChild(el('td', {}, inst.asset));
+          tr.appendChild(el('td', { class: 'num' }, String(inst.opening)));
+          const dCls = inst.direction === 'IN' ? 'delta-in' : 'delta-out';
+          tr.appendChild(el('td', { class: 'num ' + dCls }, (inst.direction === 'IN' ? '+' : '−') + inst.delta));
+          tr.appendChild(el('td', {}, el('span', { class: 'pill ' + inst.direction.toLowerCase() }, inst.direction)));
+          tr.appendChild(el('td', { class: 'num' }, String(inst.closing)));
+          tb.appendChild(tr);
+        }
+        t.appendChild(tb);
+        v.appendChild(t);
+      }
+      return v;
+    },
+    info: {
+      tag: 'STEP 6 · Instructions',
+      what: 'The engine recomputes the netting matrix using the <em>settled</em> quantities (not the original ones), then emits one instruction per non-zero net change.',
+      why: 'These are what actually moves on the ledger. <span class="pill in">IN</span> increases the holding; <span class="pill out">OUT</span> decreases it. Cells where opening equals closing produce no instruction — they\'re already balanced.',
+      detail: '<p>22 instructions total: 11 <span class="pill in">IN</span> and 11 <span class="pill out">OUT</span>. They balance because settlement moves value, doesn\'t create it.</p>'
     }
   },
 

@@ -75,6 +75,7 @@ type engine struct {
 	negativeLocations []*location
 	originalTrades    []Trade
 	strictFifo        bool
+	penalties         []*Penalty
 }
 
 // newEngine creates an empty settlement engine. Call init before run.
@@ -88,6 +89,7 @@ func newEngine(strictFifo bool) *engine {
 		memberIndex:    make(map[string]int),
 		originalTrades: make([]Trade, 0),
 		strictFifo:     strictFifo,
+		penalties:      make([]*Penalty, 0),
 	}
 	return m
 }
@@ -255,7 +257,7 @@ func (m *engine) calculateNetting() {
 // reverses the minimum amount of the most-recent trades (LIFO order) needed to
 // eliminate each deficit. Returns true if any negatives were found so the caller
 // knows to run another pass.
-func (m *engine) runIteration() bool {
+func (m *engine) runIteration(computePenalties bool) bool {
 	m.negativeLocations = make([]*location, 0)
 	for i, assets := range m.netting {
 		for j, value := range assets {
@@ -271,6 +273,13 @@ func (m *engine) runIteration() bool {
 
 	for _, loc := range m.negativeLocations {
 		remaining := new(big.Int).Neg(m.netting[loc.member][loc.asset])
+		if computePenalties {
+			m.penalties = append(m.penalties, &Penalty{
+				Member: m.members[loc.member],
+				Asset:  m.assets[loc.asset].Symbol(),
+				Amount: toDecimal(remaining),
+			})
+		}
 		for {
 			if remaining.Sign() <= 0 {
 				break
@@ -464,7 +473,7 @@ func (m *engine) run() Results {
 	// m.printNettingTable(0)
 	i := 1
 	for {
-		ok := m.runIteration()
+		ok := m.runIteration(i == 1)
 		// m.printNettingTable(i)
 		i += 1
 		if !ok {

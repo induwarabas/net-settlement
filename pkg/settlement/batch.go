@@ -175,5 +175,5 @@ func splitBatches(result *Result) Results {
 			Instructions: instrByRoot[r],
 		})
 	}
-	return Results{Deferred: deferred, Batches: batches}
+	return Results{Deferred: deferred, Batches: batches, Penalties: result.Penalties}
 }
