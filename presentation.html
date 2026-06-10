@@ -1,0 +1,2798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settlement Engine — Interactive Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-0: #f8fafc;
+  --bg-1: #ffffff;
+  --bg-2: #f1f5f9;
+  --bg-3: #e2e8f0;
+  --line: rgba(15, 23, 42, 0.07);
+  --line-strong: rgba(15, 23, 42, 0.14);
+  --text-0: #0f172a;
+  --text-1: #334155;
+  --text-2: #64748b;
+  --text-3: #94a3b8;
+  --indigo: #4f46e5;
+  --indigo-strong: #4338ca;
+  --indigo-soft: #eef2ff;
+  --cyan: #0891b2;
+  --cyan-soft: #ecfeff;
+  --emerald: #059669;
+  --emerald-soft: #ecfdf5;
+  --amber: #d97706;
+  --amber-soft: #fffbeb;
+  --rose: #e11d48;
+  --rose-soft: #fff1f2;
+  --red: #dc2626;
+  --red-soft: #fef2f2;
+  --blue: #2563eb;
+  --blue-soft: #eff6ff;
+  --violet: #7c3aed;
+  --violet-soft: #f5f3ff;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.08);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 0%, rgba(79,70,229,0.08), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 90% 100%, rgba(8,145,178,0.06), transparent 60%),
+    linear-gradient(135deg, #fafbff 0%, #f6f8fc 100%);
+  color: var(--text-0);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+code, .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace; }
+
+#app {
+  display: grid;
+  grid-template-rows: 64px 1fr 72px;
+  height: 100vh;
+}
+
+/* ===== HEADER ===== */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.75);
+  z-index: 10;
+}
+.brand { display: flex; align-items: baseline; gap: 14px; }
+.brand .logo {
+  font-size: 22px;
+  background: linear-gradient(135deg, var(--indigo), var(--cyan));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-weight: 900;
+}
+.brand .title { font-weight: 700; letter-spacing: -0.01em; color: var(--text-0); }
+.brand .subtitle { font-size: 12px; color: var(--text-2); }
+.step-indicator { display: flex; align-items: center; gap: 14px; }
+.step-pill {
+  background: var(--indigo-soft);
+  border: 1px solid rgba(79,70,229,0.2);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--indigo);
+}
+.step-pill .step-name { color: var(--text-1); margin-left: 6px; font-weight: 500; }
+
+/* ===== MAIN ===== */
+main {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 24px;
+  padding: 24px 28px;
+  overflow: hidden;
+}
+.viz-pane {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 28px;
+  overflow: auto;
+  transition: opacity 200ms ease;
+  position: relative;
+  box-shadow: var(--shadow-md);
+}
+.info-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+.info-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+}
+.info-card h2 {
+  font-size: 19px;
+  margin-bottom: 4px;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, var(--text-0), var(--indigo));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.info-card .step-tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--cyan);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.info-block { margin-top: 14px; }
+.info-block .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  margin-bottom: 6px;
+  display: flex; align-items: center; gap: 6px;
+}
+.info-block.what .label { color: var(--emerald); }
+.info-block.why .label { color: var(--amber); }
+.info-block.detail .label { color: var(--violet); }
+.info-block p, .info-block li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-1);
+}
+.info-block ul { padding-left: 18px; }
+.info-block li { margin: 4px 0; }
+.info-block code {
+  background: var(--indigo-soft);
+  color: var(--indigo);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.info-block .pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 2px;
+}
+.pill.full { background: var(--emerald-soft); color: var(--emerald); border: 1px solid rgba(5,150,105,0.15); }
+.pill.partial { background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(217,119,6,0.15); }
+.pill.deferred { background: var(--red-soft); color: var(--red); border: 1px solid rgba(220,38,38,0.15); }
+.pill.in { background: var(--emerald-soft); color: var(--emerald); border: 1px solid rgba(5,150,105,0.15); }
+.pill.out { background: var(--blue-soft); color: var(--blue); border: 1px solid rgba(37,99,235,0.15); }
+
+/* ===== FOOTER ===== */
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(20px);
+  z-index: 10;
+}
+.dots { display: flex; gap: 8px; }
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  transition: all 250ms ease;
+  cursor: pointer;
+}
+.dot.active {
+  background: var(--indigo);
+  width: 22px;
+  border-radius: 999px;
+}
+.dot.done { background: var(--indigo); opacity: 0.4; }
+.dot:hover { background: var(--indigo); opacity: 0.7; }
+
+button.nav {
+  background: linear-gradient(135deg, var(--indigo), var(--indigo-strong));
+  color: white;
+  border: none;
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 200ms ease;
+  display: flex; align-items: center; gap: 6px;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 12px rgba(79,70,229,0.25);
+}
+button.nav:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(79,70,229,0.35);
+}
+button.nav:disabled {
+  background: var(--bg-3);
+  color: var(--text-3);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+button.nav.secondary {
+  background: white;
+  border: 1px solid var(--line-strong);
+  color: var(--text-1);
+  box-shadow: var(--shadow-sm);
+}
+button.nav.secondary:hover:not(:disabled) {
+  background: var(--bg-0);
+  border-color: var(--indigo);
+  color: var(--indigo);
+}
+
+/* ===== VIZ CONTENT STYLES ===== */
+.viz-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+  background: linear-gradient(135deg, var(--text-0) 0%, var(--indigo) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.viz-subtitle {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 24px;
+}
+
+/* Hero / welcome */
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+}
+.hero .hero-icon {
+  font-size: 60px;
+  background: linear-gradient(135deg, var(--indigo), var(--cyan));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  margin-bottom: 20px;
+  filter: drop-shadow(0 8px 24px rgba(79,70,229,0.25));
+}
+.hero h1 {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, var(--text-0) 0%, var(--indigo) 60%, var(--cyan) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero p { font-size: 16px; color: var(--text-1); max-width: 580px; line-height: 1.6; margin-bottom: 8px; }
+.hero .tip {
+  margin-top: 36px;
+  font-size: 12px;
+  color: var(--text-1);
+  padding: 10px 18px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+.kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: white;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 1px 0 var(--line);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+/* Member cards (ledger view) */
+.member-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+.member-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  transition: all 200ms;
+  box-shadow: var(--shadow-sm);
+}
+.member-card:hover {
+  border-color: var(--indigo);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.member-card .name {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 4px;
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--text-0);
+}
+.tier {
+  display: inline-block;
+  font-size: 10px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.tier.t1 { background: var(--cyan-soft); color: var(--cyan); border: 1px solid rgba(8,145,178,0.18); }
+.tier.t2 { background: var(--violet-soft); color: var(--violet); border: 1px solid rgba(124,58,237,0.18); }
+
+/* Ledger table — uses .matrix as base, adds tweaks */
+.matrix.ledger-table th.mem-tier,
+.matrix.ledger-table td.mem-tier {
+  text-align: center;
+}
+.member-card .holdings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  margin-top: 8px;
+}
+.member-card .holding { display: flex; justify-content: space-between; font-size: 12px; }
+.member-card .holding .asset { color: var(--text-2); }
+.member-card .holding .qty { color: var(--text-0); font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+
+/* Matrix */
+.matrix-wrap {
+  overflow: auto;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+.matrix {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+}
+.matrix th, .matrix td {
+  padding: 10px 14px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+.matrix tr:last-child td { border-bottom: none; }
+.matrix th:last-child, .matrix td:last-child { border-right: none; }
+.matrix th {
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+.matrix th:first-child, .matrix td:first-child {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-0);
+  background: var(--bg-0);
+}
+.matrix td.cell {
+  position: relative;
+  transition: all 250ms;
+  color: var(--text-0);
+}
+.matrix td.cell .opening {
+  color: var(--text-3);
+  font-size: 11px;
+  margin-right: 6px;
+}
+.matrix td.cell .arrow { color: var(--text-3); margin: 0 4px; }
+.matrix td.cell.changed {
+  background: var(--amber-soft);
+  outline: 2px solid var(--amber);
+  outline-offset: -2px;
+  z-index: 1;
+  animation: pulseChange 1.4s ease-out;
+}
+.matrix td.cell.deficit {
+  background: var(--red-soft);
+  color: var(--red);
+  font-weight: 700;
+}
+.matrix td.cell.deficit.changed {
+  outline-color: var(--red);
+  background: var(--red-soft);
+}
+.matrix td.cell.deficit::after {
+  content: '⚠';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 10px;
+  color: var(--red);
+}
+.matrix td.cell.empty { color: var(--text-3); }
+.matrix td.cell.resolved {
+  background: var(--emerald-soft);
+}
+.matrix td.cell.surplus { color: var(--text-0); }
+@keyframes pulseChange {
+  0% { outline-color: var(--amber); background: rgba(217,119,6,0.28); }
+  100% { background: var(--amber-soft); }
+}
+
+/* Trade list */
+.trade-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trade-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 28px 80px 1fr 130px 90px;
+  align-items: center;
+  gap: 12px;
+  transition: all 200ms;
+  font-size: 13px;
+  box-shadow: var(--shadow-sm);
+}
+.trade-card:hover {
+  border-color: var(--indigo);
+  box-shadow: var(--shadow-md);
+}
+.trade-card.focus {
+  border-color: var(--cyan);
+  background: var(--cyan-soft);
+  box-shadow: 0 0 20px rgba(8,145,178,0.15);
+}
+.trade-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--indigo);
+  text-align: center;
+}
+.trade-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.trade-flow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-0);
+}
+.trade-flow .who { font-weight: 600; }
+.trade-flow .arrow { color: var(--text-3); }
+.trade-flow .amt {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--cyan);
+  background: var(--cyan-soft);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(8,145,178,0.15);
+}
+.trade-flow .amt.pay {
+  color: var(--rose);
+  background: var(--rose-soft);
+  border-color: rgba(225,29,72,0.15);
+}
+.trade-pair {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-2);
+  text-align: right;
+}
+.trade-status .pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  width: 100%;
+  text-align: center;
+}
+
+/* Trade blotter */
+.blotter-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.blotter-table th, .blotter-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-0);
+  text-align: left;
+  vertical-align: middle;
+}
+.blotter-table tr:last-child td { border-bottom: none; }
+.blotter-table thead th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  font-weight: 700;
+  background: var(--bg-2);
+  position: sticky;
+  top: 0;
+}
+.blotter-table .col-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--indigo);
+  text-align: center;
+  width: 56px;
+}
+.blotter-table .col-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-2);
+  width: 110px;
+}
+.blotter-table .col-member,
+.blotter-table .col-counterparty {
+  font-weight: 600;
+  color: var(--text-0);
+  white-space: nowrap;
+}
+.blotter-table .col-member .side-pill,
+.blotter-table .col-counterparty .side-pill {
+  margin-right: 8px;
+}
+.blotter-table .col-side { text-align: center; width: 80px; }
+.blotter-table .col-instrument {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  color: var(--text-0);
+  text-align: center;
+}
+.blotter-table .col-qty, .blotter-table .col-price, .blotter-table .col-notional {
+  font-family: 'JetBrains Mono', monospace;
+  text-align: right;
+}
+.blotter-table .col-qty { color: var(--cyan); }
+.blotter-table .col-price { color: var(--text-1); }
+.blotter-table .col-notional { color: var(--rose); }
+.blotter-table tr.trade-band td { background: var(--bg-0); }
+.blotter-table tr.divider-top td { border-top: 1px solid var(--line-strong); }
+.side-pill {
+  display: inline-block;
+  padding: 3px 14px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.side-pill.side-buy {
+  background: var(--emerald-soft);
+  color: var(--emerald);
+  border: 1px solid rgba(5,150,105,0.2);
+}
+.side-pill.side-sell {
+  background: var(--rose-soft);
+  color: var(--rose);
+  border: 1px solid rgba(225,29,72,0.2);
+}
+
+/* Phase header (Before / Δ / After) and delta matrix styling */
+.phase-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--text-2);
+  margin: 18px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.phase-label:first-child { margin-top: 0; }
+.phase-label .marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 700;
+}
+.phase-label.phase-before .marker { background: var(--red-soft); color: var(--red); }
+.phase-label.phase-delta .marker { background: var(--amber-soft); color: var(--amber); }
+.phase-label.phase-result .marker { background: var(--emerald-soft); color: var(--emerald); }
+.phase-label.phase-before { color: var(--red); }
+.phase-label.phase-delta { color: var(--amber); }
+.phase-label.phase-result { color: var(--emerald); }
+.phase-label .hint {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.matrix.delta-matrix td.cell.delta-zero {
+  color: var(--text-3);
+  text-align: right;
+}
+.matrix.delta-matrix td.cell.delta-pos {
+  color: var(--emerald);
+  font-weight: 700;
+  background: var(--emerald-soft);
+  outline: 2px solid var(--emerald);
+  outline-offset: -2px;
+  z-index: 1;
+}
+.matrix.delta-matrix td.cell.delta-neg {
+  color: var(--rose);
+  font-weight: 700;
+  background: var(--rose-soft);
+  outline: 2px solid var(--rose);
+  outline-offset: -2px;
+  z-index: 1;
+}
+.matrix td.cell.resolved-deficit {
+  background: var(--emerald-soft) !important;
+  color: var(--emerald) !important;
+  font-weight: 700;
+  outline: 2px solid var(--emerald);
+  outline-offset: -2px;
+  z-index: 1;
+}
+.matrix td.cell.resolved-deficit::after {
+  content: '✓';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 10px;
+  color: var(--emerald);
+}
+
+/* Highlighted cells in the annotated Before matrix */
+.matrix td.cell.target-resolve {
+  outline: 3px solid var(--red) !important;
+  outline-offset: -3px;
+  z-index: 3;
+  box-shadow: 0 0 0 6px rgba(220, 38, 38, 0.10);
+}
+.matrix td.cell.side-effect {
+  outline: 2px dashed var(--amber) !important;
+  outline-offset: -2px;
+  z-index: 2;
+  background: var(--amber-soft) !important;
+}
+
+/* Hand-drawn annotation overlay for Before matrix */
+.annotated-matrix {
+  position: relative;
+  padding: 96px 24px 110px 24px;
+  margin: 0 -8px;
+}
+.annotated-matrix .matrix-wrap {
+  position: relative;
+  z-index: 1;
+}
+.annotations-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 5;
+}
+.sketch-label {
+  position: absolute;
+  z-index: 6;
+  padding: 6px 16px;
+  font-family: 'Caveat', 'Bradley Hand', 'Marker Felt', 'Comic Sans MS', cursive;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.15;
+  border-radius: 14px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.sketch-label .emoji {
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', system-ui;
+  font-size: 18px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* Trade-anatomy view */
+.anatomy {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 30px;
+  padding: 24px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  margin-bottom: 24px;
+}
+.anatomy-party {
+  text-align: center;
+  padding: 22px 18px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.anatomy-party .role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.anatomy-party .who { font-size: 22px; font-weight: 700; margin-bottom: 16px; color: var(--text-0); }
+.anatomy-party .flows { display: flex; flex-direction: column; gap: 6px; }
+.anatomy-party .flow {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 500;
+}
+.anatomy-party .flow.gain {
+  background: var(--emerald-soft);
+  color: var(--emerald);
+  border: 1px solid rgba(5,150,105,0.15);
+}
+.anatomy-party .flow.lose {
+  background: var(--red-soft);
+  color: var(--red);
+  border: 1px solid rgba(220,38,38,0.15);
+}
+.anatomy-bridge {
+  text-align: center;
+}
+.anatomy-bridge .pair {
+  font-family: 'JetBrains Mono', monospace;
+  background: linear-gradient(135deg, var(--indigo), var(--cyan));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.anatomy-bridge .ratio {
+  color: var(--text-2);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.anatomy-bridge .arrow {
+  font-size: 28px;
+  color: var(--indigo);
+  margin: 6px 0;
+}
+
+/* Reversal math card */
+.math-card {
+  background: linear-gradient(135deg, var(--indigo-soft), var(--cyan-soft));
+  border: 1px solid rgba(79,70,229,0.18);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.math-card h3 {
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: var(--indigo);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.math-row {
+  display: grid;
+  grid-template-columns: 220px 100px 100px;
+  gap: 14px;
+  padding: 8px 0;
+  border-bottom: 1px dashed rgba(15, 23, 42, 0.08);
+  align-items: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+}
+.math-row:last-child { border-bottom: none; }
+.math-row .label { color: var(--text-2); font-family: 'Inter', sans-serif; font-size: 12px; }
+.math-row .base { color: var(--cyan); text-align: right; font-weight: 500; }
+.math-row .quote { color: var(--rose); text-align: right; font-weight: 500; }
+.math-row.calc { color: var(--amber); font-size: 12px; }
+.math-row.calc .label { color: var(--amber); font-weight: 600; }
+.math-row.result {
+  background: rgba(5,150,105,0.08);
+  padding: 12px 14px;
+  font-weight: 700;
+  border-radius: 6px;
+  margin: 4px -4px;
+}
+.math-row.result .label { color: var(--emerald); }
+.math-row.result .base, .math-row.result .quote { color: var(--emerald); }
+.math-row.deferred {
+  background: rgba(217,119,6,0.08);
+  padding: 12px 14px;
+  font-weight: 700;
+  border-radius: 6px;
+  margin: 4px -4px;
+}
+.math-row.deferred .label { color: var(--amber); }
+.math-row.deferred .base, .math-row.deferred .quote { color: var(--amber); }
+
+/* Scenario card (used in Dust threshold + FIFO demo) */
+.scenario-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-sm);
+}
+.scenario-card + .scenario-card { margin-top: 0; }
+.scenario-card .scenario-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.scenario-card .scenario-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.scenario-card .scenario-badge.defer { background: var(--red-soft); color: var(--red); border: 1px solid rgba(220,38,38,0.2); }
+.scenario-card .scenario-badge.widen { background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(217,119,6,0.2); }
+.scenario-card .scenario-badge.drag  { background: var(--blue-soft);  color: var(--blue);  border: 1px solid rgba(37,99,235,0.2); }
+.scenario-card .scenario-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-0);
+  letter-spacing: -0.01em;
+}
+.scenario-card .scenario-subtitle {
+  font-size: 13px;
+  color: var(--text-2);
+  margin: 4px 0 16px;
+}
+.scenario-card .scenario-result {
+  margin-top: 14px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  font-weight: 500;
+}
+.scenario-card .scenario-result.defer {
+  background: var(--red-soft);
+  color: var(--red);
+  border-left: 3px solid var(--red);
+}
+.scenario-card .scenario-result.widen {
+  background: var(--amber-soft);
+  color: var(--amber);
+  border-left: 3px solid var(--amber);
+}
+.scenario-card .scenario-result.partial {
+  background: var(--emerald-soft);
+  color: var(--emerald);
+  border-left: 3px solid var(--emerald);
+}
+.scenario-card .scenario-result strong { font-weight: 800; }
+
+/* Dust check grid */
+.dust-check {
+  display: grid;
+  grid-template-columns: 90px 1fr 100px 90px;
+  gap: 8px 14px;
+  padding: 14px 16px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  align-items: center;
+  margin-top: 12px;
+}
+.dust-check .dh {
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.dust-check .asset { color: var(--text-0); font-weight: 600; }
+.dust-check .desc { color: var(--text-2); font-family: 'Inter', sans-serif; font-size: 12px; }
+.dust-check .num { text-align: right; color: var(--text-1); }
+.dust-check .verdict {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+}
+.dust-check .verdict.pass { color: var(--emerald); }
+.dust-check .verdict.fail { color: var(--red); }
+
+/* Chain step (used in FIFO chain and in side-by-side comparison) */
+.chain-step {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow-sm);
+}
+.chain-step.partial { border-left: 4px solid var(--amber); }
+.chain-step.dragged { border-left: 4px solid var(--red); }
+.chain-step .step-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 14px;
+}
+.chain-step .trade-ref {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--indigo);
+  font-size: 18px;
+}
+.chain-step .trade-desc {
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.chain-step .trade-desc .who { font-weight: 600; color: var(--text-0); }
+.chain-step .step-row .pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.fifo-chain { margin-top: 8px; }
+.fifo-chain .chain-arrow {
+  text-align: center;
+  color: var(--red);
+  font-family: 'Caveat', cursive;
+  font-size: 18px;
+  margin: 14px 0;
+  font-weight: 700;
+}
+.fifo-chain .chain-arrow .arrow-icon { font-size: 28px; display: block; margin-bottom: -4px; }
+.position-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  background: var(--indigo-soft);
+  color: var(--indigo);
+  border: 1px solid rgba(79,70,229,0.2);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0 2px;
+}
+.position-tag.shared {
+  background: var(--amber-soft);
+  color: var(--amber);
+  border-color: rgba(217,119,6,0.35);
+}
+
+/* Side-by-side comparison (used in Strict FIFO) */
+.comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.comparison-side {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.comparison-side.without { border-top: 4px solid var(--red); }
+.comparison-side.with    { border-top: 4px solid var(--emerald); }
+.comparison-header { text-align: center; }
+.comparison-badge {
+  display: inline-block;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.comparison-badge.bad  { background: var(--red-soft);     color: var(--red);     border: 1px solid rgba(220,38,38,0.2); }
+.comparison-badge.good { background: var(--emerald-soft); color: var(--emerald); border: 1px solid rgba(5,150,105,0.2); }
+.comparison-narrative {
+  font-family: 'Caveat', 'Bradley Hand', 'Marker Felt', cursive;
+  font-size: 17px;
+  color: var(--text-1);
+  text-align: center;
+  padding: 2px 8px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.comparison-narrative .arrow-icon {
+  display: block;
+  font-size: 26px;
+  margin-bottom: -4px;
+  color: var(--text-3);
+}
+.comparison-result {
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  font-weight: 500;
+}
+.comparison-result.bad  { background: var(--red-soft);     color: var(--red);     border-left: 3px solid var(--red); }
+.comparison-result.good { background: var(--emerald-soft); color: var(--emerald); border-left: 3px solid var(--emerald); }
+.comparison-result strong { font-weight: 800; }
+.chain-step.full { border-left: 4px solid var(--emerald); }
+@media (max-width: 900px) {
+  .comparison { grid-template-columns: 1fr; }
+}
+
+/* Iterations badge row */
+.iter-strip {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.iter-badge {
+  background: white;
+  border: 1px solid var(--line);
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--text-1);
+  box-shadow: var(--shadow-sm);
+}
+.iter-badge .num { color: var(--indigo); font-weight: 700; margin-right: 4px; }
+.iter-badge.done { border-color: rgba(5,150,105,0.35); }
+.iter-badge.done .num { color: var(--emerald); }
+.iter-badge.active {
+  border-color: var(--cyan);
+  background: var(--cyan-soft);
+}
+
+/* Stats row */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.stat-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+.stat-card .val {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-0);
+}
+.stat-card .lbl {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-2);
+  letter-spacing: 0.1em;
+  margin-top: 4px;
+  font-weight: 600;
+}
+.stat-card.full .val { color: var(--emerald); }
+.stat-card.partial .val { color: var(--amber); }
+.stat-card.deferred .val { color: var(--red); }
+.stat-card.total .val { color: var(--indigo); }
+
+/* Instructions table */
+.inst-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.inst-table th, .inst-table td {
+  padding: 9px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-0);
+}
+.inst-table tr:last-child td { border-bottom: none; }
+.inst-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  font-weight: 700;
+  background: var(--bg-2);
+}
+.inst-table td.num {
+  font-family: 'JetBrains Mono', monospace;
+  text-align: right;
+}
+.inst-table .delta-in { color: var(--emerald); font-weight: 700; }
+.inst-table .delta-out { color: var(--blue); font-weight: 700; }
+.batch-header {
+  margin: 18px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--indigo-soft);
+  border-left: 3px solid var(--indigo);
+  border-radius: 6px;
+  color: var(--text-0);
+}
+.batch-header .name { font-weight: 700; }
+.batch-header .meta { font-size: 11px; color: var(--text-2); }
+
+/* Batch graph */
+.batch-svg-wrap {
+  display: flex;
+  justify-content: center;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+svg.batch-graph { font-family: 'Inter', sans-serif; }
+svg.batch-graph .batch-bg {
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+svg.batch-graph .batch-bg.b1 { stroke: var(--indigo); fill: rgba(79,70,229,0.05); }
+svg.batch-graph .batch-bg.b2 { stroke: var(--emerald); fill: rgba(5,150,105,0.05); }
+svg.batch-graph .batch-bg.b3 { stroke: var(--amber); fill: rgba(217,119,6,0.05); }
+svg.batch-graph .batch-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+svg.batch-graph .batch-title.b1 { fill: var(--indigo); }
+svg.batch-graph .batch-title.b2 { fill: var(--emerald); }
+svg.batch-graph .batch-title.b3 { fill: var(--amber); }
+svg.batch-graph .node-mem {
+  fill: white;
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 1px 2px rgba(15,23,42,0.08));
+}
+svg.batch-graph .node-mem-label {
+  fill: var(--text-0);
+  font-size: 11px;
+  text-anchor: middle;
+  font-weight: 600;
+}
+svg.batch-graph .node-mem-asset {
+  fill: var(--cyan);
+  font-size: 9px;
+  text-anchor: middle;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+svg.batch-graph .node-trade {
+  fill: var(--indigo);
+  filter: drop-shadow(0 2px 4px rgba(79,70,229,0.3));
+}
+svg.batch-graph .node-trade-label {
+  fill: white;
+  font-size: 10px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+svg.batch-graph .edge {
+  stroke: var(--text-3);
+  stroke-width: 1.2;
+  opacity: 0.5;
+}
+
+/* Highlight box (key insight) */
+.insight {
+  background: linear-gradient(135deg, var(--indigo-soft), var(--cyan-soft));
+  border-left: 3px solid var(--indigo);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-1);
+  line-height: 1.55;
+}
+.insight strong { color: var(--indigo); }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; border: 2px solid transparent; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Smaller screens fallback */
+@media (max-width: 1100px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .info-pane { max-height: 240px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">
+      <span class="logo">◈</span>
+      <span class="title">Settlement Engine</span>
+      <span class="subtitle">small-sample interactive walkthrough</span>
+    </div>
+    <div class="step-indicator">
+      <div class="step-pill">
+        <span id="stepNumber">1</span>/<span id="stepTotal">12</span>
+        <span class="step-name" id="stepPillName">Welcome</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="viz-pane" id="viz"></section>
+    <aside class="info-pane" id="info"></aside>
+  </main>
+
+  <footer>
+    <button class="nav secondary" id="prevBtn">← Previous</button>
+    <div class="dots" id="dots"></div>
+    <button class="nav" id="nextBtn">Next →</button>
+  </footer>
+</div>
+
+<script>
+'use strict';
+
+// ============ DATA ============
+const MEMBERS = ['Alice', 'Bob', 'Charlie', 'Dave', 'Eve', 'Frank'];
+const TIERS = {Alice:'T1', Bob:'T1', Charlie:'T1', Dave:'T2', Eve:'T2', Frank:'T2'};
+const ASSETS = ['BTC', 'ETH', 'XRP', 'ADA', 'BNB', 'USDT'];
+
+const OPENING = {
+  Alice:   {BTC: 8,  ETH: 50, XRP: 40, ADA: 20, BNB: 200, USDT: 100},
+  Bob:     {BTC: 0,  ETH: 55, XRP: null, ADA: 50, BNB: null, USDT: 0},
+  Charlie: {BTC: 5,  ETH: 25, XRP: 20, ADA: null, BNB: null, USDT: 200},
+  Dave:    {BTC: 2,  ETH: null, XRP: 12, ADA: 10, BNB: 50,  USDT: 200},
+  Eve:     {BTC: 15, ETH: 5,  XRP: 20, ADA: 8,  BNB: 200, USDT: 100},
+  Frank:   {BTC: 15, ETH: 1,  XRP: 50, ADA: 0,  BNB: 150, USDT: 0}
+};
+
+const TRADES = [
+  {id: 1,  time: '08:00:00.060', buyer: 'Alice',   seller: 'Bob',     base: 'BTC', quote: 'ETH',  baseQty: 10, quoteQty: 50,  pair: 'BTC-ETH'},
+  {id: 2,  time: '08:00:00.258', buyer: 'Charlie', seller: 'Dave',    base: 'BTC', quote: 'ETH',  baseQty: 5,  quoteQty: 25,  pair: 'BTC-ETH'},
+  {id: 3,  time: '08:00:00.901', buyer: 'Eve',     seller: 'Charlie', base: 'XRP', quote: 'USDT', baseQty: 20, quoteQty: 200, pair: 'XRP-USDT'},
+  {id: 4,  time: '08:00:00.911', buyer: 'Dave',    seller: 'Eve',     base: 'ADA', quote: 'BNB',  baseQty: 10, quoteQty: 50,  pair: 'ADA-BNB'},
+  {id: 5,  time: '08:00:00.931', buyer: 'Frank',   seller: 'Dave',    base: 'ETH', quote: 'XRP',  baseQty: 25, quoteQty: 50,  pair: 'ETH-XRP'},
+  {id: 6,  time: '08:00:01.065', buyer: 'Bob',     seller: 'Eve',     base: 'ETH', quote: 'USDT', baseQty: 10, quoteQty: 200, pair: 'ETH-USDT'},
+  {id: 7,  time: '08:00:01.409', buyer: 'Dave',    seller: 'Alice',   base: 'XRP', quote: 'USDT', baseQty: 10, quoteQty: 100, pair: 'XRP-USDT'},
+  {id: 8,  time: '08:00:01.496', buyer: 'Alice',   seller: 'Dave',    base: 'ADA', quote: 'BNB',  baseQty: 20, quoteQty: 100, pair: 'ADA-BNB'},
+  {id: 9,  time: '08:00:01.496', buyer: 'Eve',     seller: 'Bob',     base: 'ADA', quote: 'USDT', baseQty: 2,  quoteQty: 100, pair: 'ADA-USDT'},
+  {id: 10, time: '08:00:01.726', buyer: 'Eve',     seller: 'Frank',   base: 'BTC', quote: 'BNB',  baseQty: 15, quoteQty: 150, pair: 'BTC-BNB'}
+];
+
+const FINAL_STATUS = {
+  1:  {status: 'DEFERRED', settledBase: 0,  settledQuote: 0,   deferredBase: 10, deferredQuote: 50},
+  2:  {status: 'PARTIAL',  settledBase: 2,  settledQuote: 10,  deferredBase: 3,  deferredQuote: 15},
+  3:  {status: 'PARTIAL',  settledBase: 10, settledQuote: 100, deferredBase: 10, deferredQuote: 100},
+  4:  {status: 'PARTIAL',  settledBase: 8,  settledQuote: 40,  deferredBase: 2,  deferredQuote: 10},
+  5:  {status: 'PARTIAL',  settledBase: 10, settledQuote: 20,  deferredBase: 15, deferredQuote: 30},
+  6:  {status: 'DEFERRED', settledBase: 0,  settledQuote: 0,   deferredBase: 10, deferredQuote: 200},
+  7:  {status: 'FULL',     settledBase: 10, settledQuote: 100, deferredBase: 0,  deferredQuote: 0},
+  8:  {status: 'PARTIAL',  settledBase: 18, settledQuote: 90,  deferredBase: 2,  deferredQuote: 10},
+  9:  {status: 'DEFERRED', settledBase: 0,  settledQuote: 0,   deferredBase: 2,  deferredQuote: 100},
+  10: {status: 'FULL',     settledBase: 15, settledQuote: 150, deferredBase: 0,  deferredQuote: 0}
+};
+
+const BATCHES = [
+  {
+    id: 1, color: 'b1', trades: [4, 8, 10],
+    instructions: [
+      {member: 'Alice', asset: 'ADA', opening: 20,  delta: 18,  direction: 'IN',  closing: 38},
+      {member: 'Alice', asset: 'BNB', opening: 200, delta: 90,  direction: 'OUT', closing: 110},
+      {member: 'Eve',   asset: 'ADA', opening: 8,   delta: 8,   direction: 'OUT', closing: 0},
+      {member: 'Eve',   asset: 'BNB', opening: 200, delta: 110, direction: 'OUT', closing: 90},
+      {member: 'Eve',   asset: 'BTC', opening: 15,  delta: 15,  direction: 'IN',  closing: 30},
+      {member: 'Dave',  asset: 'ADA', opening: 10,  delta: 10,  direction: 'OUT', closing: 0},
+      {member: 'Dave',  asset: 'BNB', opening: 50,  delta: 50,  direction: 'IN',  closing: 100},
+      {member: 'Frank', asset: 'BNB', opening: 150, delta: 150, direction: 'IN',  closing: 300},
+      {member: 'Frank', asset: 'BTC', opening: 15,  delta: 15,  direction: 'OUT', closing: 0}
+    ]
+  },
+  {
+    id: 2, color: 'b2', trades: [3],
+    instructions: [
+      {member: 'Eve',     asset: 'USDT', opening: 100, delta: 100, direction: 'OUT', closing: 0},
+      {member: 'Eve',     asset: 'XRP',  opening: 20,  delta: 10,  direction: 'IN',  closing: 30},
+      {member: 'Charlie', asset: 'USDT', opening: 200, delta: 100, direction: 'IN',  closing: 300},
+      {member: 'Charlie', asset: 'XRP',  opening: 20,  delta: 10,  direction: 'OUT', closing: 10}
+    ]
+  },
+  {
+    id: 3, color: 'b3', trades: [2, 5, 7],
+    instructions: [
+      {member: 'Alice',   asset: 'USDT', opening: 100, delta: 100, direction: 'IN',  closing: 200},
+      {member: 'Alice',   asset: 'XRP',  opening: 40,  delta: 10,  direction: 'OUT', closing: 30},
+      {member: 'Dave',    asset: 'BTC',  opening: 2,   delta: 2,   direction: 'OUT', closing: 0},
+      {member: 'Dave',    asset: 'USDT', opening: 200, delta: 100, direction: 'OUT', closing: 100},
+      {member: 'Dave',    asset: 'XRP',  opening: 12,  delta: 30,  direction: 'IN',  closing: 42},
+      {member: 'Frank',   asset: 'ETH',  opening: 1,   delta: 10,  direction: 'IN',  closing: 11},
+      {member: 'Frank',   asset: 'XRP',  opening: 50,  delta: 20,  direction: 'OUT', closing: 30},
+      {member: 'Charlie', asset: 'BTC',  opening: 5,   delta: 2,   direction: 'IN',  closing: 7},
+      {member: 'Charlie', asset: 'ETH',  opening: 25,  delta: 10,  direction: 'OUT', closing: 15}
+    ]
+  }
+];
+
+// ============ MATRIX COMPUTATIONS ============
+function emptyMatrix(filled = false) {
+  const m = {};
+  MEMBERS.forEach(mem => {
+    m[mem] = {};
+    ASSETS.forEach(a => { m[mem][a] = filled ? 0 : null; });
+  });
+  return m;
+}
+function copyMatrix(m) {
+  const out = {};
+  for (const k in m) out[k] = {...m[k]};
+  return out;
+}
+function openingMatrix() {
+  const m = emptyMatrix();
+  for (const mem of MEMBERS) for (const a of ASSETS) {
+    const v = OPENING[mem][a];
+    m[mem][a] = (v === null || v === undefined) ? 0 : v;
+  }
+  return m;
+}
+function applyTrade(m, t, scale = 1) {
+  m[t.buyer][t.base]   += t.baseQty  * scale;
+  m[t.buyer][t.quote]  -= t.quoteQty * scale;
+  m[t.seller][t.base]  -= t.baseQty  * scale;
+  m[t.seller][t.quote] += t.quoteQty * scale;
+}
+function fullyNettedMatrix() {
+  const m = openingMatrix();
+  for (const t of TRADES) applyTrade(m, t, 1);
+  return m;
+}
+function finalSettledMatrix() {
+  const m = openingMatrix();
+  for (const t of TRADES) {
+    const ft = FINAL_STATUS[t.id];
+    const scaledBase = ft.settledBase;
+    const scaledQuote = ft.settledQuote;
+    m[t.buyer][t.base]   += scaledBase;
+    m[t.buyer][t.quote]  -= scaledQuote;
+    m[t.seller][t.base]  -= scaledBase;
+    m[t.seller][t.quote] += scaledQuote;
+  }
+  return m;
+}
+
+// Intermediate states for the resolution walk:
+function matrixAfterT1Reversal() {
+  // Start from fully netted, undo T1 completely
+  const m = fullyNettedMatrix();
+  applyTrade(m, TRADES[0], -1);
+  return m;
+}
+function matrixAfterT1AndT2Partial() {
+  // From above, additionally reverse 3 BTC / 15 ETH of T2 (60% of T2)
+  const m = matrixAfterT1Reversal();
+  applyTrade(m, TRADES[1], -0.6);
+  return m;
+}
+
+function diffCells(prev, curr) {
+  const cells = [];
+  if (!prev || !curr) return cells;
+  for (const mem of MEMBERS) for (const a of ASSETS) {
+    if (prev[mem][a] !== curr[mem][a]) cells.push(`${mem}.${a}`);
+  }
+  return cells;
+}
+
+// ============ RENDER HELPERS ============
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, children = []) => {
+  const e = document.createElement(tag);
+  for (const k in attrs) {
+    if (k === 'class') e.className = attrs[k];
+    else if (k === 'html') e.innerHTML = attrs[k];
+    else if (k.startsWith('on')) e.addEventListener(k.substring(2), attrs[k]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return e;
+};
+function fmt(v) {
+  if (v === null || v === undefined) return '–';
+  if (v === 0) return '0';
+  // Trim trailing zeros
+  const s = (Math.round(v * 1e6) / 1e6).toString();
+  return s;
+}
+
+function renderMatrix(opts) {
+  // opts: { matrix, openingMx, highlight, resolved, compact, target, sideEffects }
+  const { matrix, openingMx, highlight = [], resolved = [], compact = false,
+          target = null, sideEffects = [] } = opts;
+  const wrap = el('div', { class: 'matrix-wrap' });
+  const table = el('table', { class: 'matrix' });
+  const thead = el('thead');
+  const headRow = el('tr');
+  headRow.appendChild(el('th', {}, 'Member'));
+  for (const a of ASSETS) headRow.appendChild(el('th', {}, a));
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = el('tbody');
+  for (const mem of MEMBERS) {
+    const row = el('tr');
+    row.appendChild(el('td', {}, mem));
+    for (const a of ASSETS) {
+      const key = `${mem}.${a}`;
+      const v = matrix[mem][a];
+      const opening = openingMx ? openingMx[mem][a] : null;
+      const td = el('td', { class: 'cell' });
+      td.setAttribute('data-cell', key);
+      const isDeficit = v < 0;
+      const isHighlight = highlight.includes(key);
+      const isResolved = resolved.includes(key);
+      const isTarget = target === key;
+      const isSideEffect = sideEffects.includes(key);
+      if (isDeficit) td.classList.add('deficit');
+      else if (isResolved) td.classList.add('resolved-deficit');
+      if (isHighlight && !isResolved && !isTarget && !isSideEffect) td.classList.add('changed');
+      if (isTarget) td.classList.add('target-resolve');
+      if (isSideEffect) td.classList.add('side-effect');
+      const orig = OPENING[mem][a];
+      const isOriginallyEmpty = (orig === null || orig === undefined);
+      if (isOriginallyEmpty && v === 0) td.classList.add('empty');
+      if (openingMx && !compact && opening !== v) {
+        td.appendChild(el('span', { class: 'opening' }, fmt(opening)));
+        td.appendChild(el('span', { class: 'arrow' }, '→'));
+      }
+      const valEl = el('span', {}, fmt(v));
+      td.appendChild(valEl);
+      row.appendChild(td);
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  // Back-compat: convert target/sideEffects to topLabel/bottomLabel
+  let topLabel = opts.topLabel || null;
+  let bottomLabel = opts.bottomLabel || null;
+  if (!topLabel && target) {
+    topLabel = { cells: [target], label: '<span class="emoji">👉</span>The balance we\'re going to resolve!', color: 'red' };
+  }
+  if (!bottomLabel && sideEffects.length > 0) {
+    bottomLabel = { cells: sideEffects, label: '<span class="emoji">↪</span>These balances get affected as a side-effect', color: 'amber' };
+  }
+
+  // If annotations requested, wrap in a positioning container and schedule overlay
+  if (topLabel || bottomLabel) {
+    const outer = el('div', { class: 'annotated-matrix' });
+    outer.appendChild(wrap);
+    requestAnimationFrame(() => {
+      if (outer.isConnected) drawCellAnnotations(outer, wrap, { topLabel, bottomLabel });
+    });
+    return outer;
+  }
+  return wrap;
+}
+
+const SKETCH_THEMES = {
+  red:     { bg: '#fff5f5', border: '#fca5a5', text: '#b91c1c', stroke: '#dc2626', shadow: 'rgba(220,38,38,0.18)' },
+  amber:   { bg: '#fffbeb', border: '#fcd34d', text: '#92400e', stroke: '#d97706', shadow: 'rgba(217,119,6,0.18)' },
+  emerald: { bg: '#ecfdf5', border: '#6ee7b7', text: '#065f46', stroke: '#059669', shadow: 'rgba(5,150,105,0.18)' }
+};
+
+function drawCellAnnotations(outer, wrap, opts) {
+  // Clear any previous annotations from re-renders
+  outer.querySelectorAll('.sketch-label, .annotations-overlay').forEach(el => el.remove());
+
+  const outerRect = outer.getBoundingClientRect();
+  function getCellRect(key) {
+    const cell = wrap.querySelector(`[data-cell="${key.replace(/"/g, '\\"')}"]`);
+    if (!cell) return null;
+    const r = cell.getBoundingClientRect();
+    return {
+      x: r.left - outerRect.left,
+      y: r.top - outerRect.top,
+      w: r.width,
+      h: r.height,
+      cx: r.left - outerRect.left + r.width / 2,
+      cy: r.top - outerRect.top + r.height / 2
+    };
+  }
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'annotations-overlay');
+  outer.appendChild(svg);
+
+  function drawSpec(spec, position) {
+    if (!spec || !spec.cells || spec.cells.length === 0) return;
+    const theme = SKETCH_THEMES[spec.color] || SKETCH_THEMES.red;
+
+    const label = el('div', { class: 'sketch-label' });
+    label.innerHTML = spec.label;
+    label.style.background = theme.bg;
+    label.style.border = '2px solid ' + theme.border;
+    label.style.color = theme.text;
+    label.style.boxShadow = '0 5px 14px ' + theme.shadow;
+    label.style.transform = position === 'top' ? 'rotate(-1.8deg)' : 'rotate(1.4deg)';
+    outer.appendChild(label);
+    const lb = label.getBoundingClientRect();
+
+    let labelX, labelY;
+    if (position === 'top') {
+      const firstCell = getCellRect(spec.cells[0]);
+      labelX = firstCell
+        ? Math.max(12, Math.min(outer.offsetWidth - lb.width - 12, firstCell.cx - lb.width / 2 + 30))
+        : Math.max(12, (outer.offsetWidth - lb.width) / 2);
+      labelY = 8;
+    } else {
+      labelX = Math.max(12, (outer.offsetWidth - lb.width) / 2);
+      labelY = wrap.offsetTop + wrap.offsetHeight + 36;
+    }
+    label.style.left = labelX + 'px';
+    label.style.top = labelY + 'px';
+
+    const n = spec.cells.length;
+    const curveDir = position === 'top' ? -1 : 1;
+    spec.cells.forEach((key, i) => {
+      const c = getCellRect(key);
+      if (!c) return;
+      const t = n === 1 ? 0.5 : i / (n - 1);
+      const startX = labelX + lb.width * (n === 1 ? (position === 'top' ? 0.4 : 0.5) : (0.2 + 0.6 * t));
+      const startY = position === 'top' ? labelY + lb.height - 4 : labelY - 2;
+      const endX = c.cx;
+      const endY = c.cy;
+      drawSketchArrow(svg, startX, startY, endX, endY, theme.stroke, { curveDir });
+    });
+  }
+
+  drawSpec(opts.topLabel, 'top');
+  drawSpec(opts.bottomLabel, 'bottom');
+}
+
+function drawSketchArrow(svg, x1, y1, x2, y2, color, opts = {}) {
+  const { curveDir = 1 } = opts;
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+  // Control point: perpendicular offset to give a casual curve
+  const curvature = Math.min(60, dist * 0.28);
+  const nx = -dy / dist;
+  const ny = dx / dist;
+  const cpx = (x1 + x2) / 2 + nx * curvature * curveDir;
+  const cpy = (y1 + y2) / 2 + ny * curvature * curveDir;
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M ${x1.toFixed(1)} ${y1.toFixed(1)} Q ${cpx.toFixed(1)} ${cpy.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`);
+  path.setAttribute('stroke', color);
+  path.setAttribute('stroke-width', '2.6');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('opacity', '0.9');
+  svg.appendChild(path);
+
+  // Compute tangent angle at endpoint (derivative of Q at t=1 is 2*(P2-CP))
+  const tangentAngle = Math.atan2(y2 - cpy, x2 - cpx);
+  const ah = 13;
+  const spread = 0.48;
+  const ax1 = x2 - ah * Math.cos(tangentAngle - spread);
+  const ay1 = y2 - ah * Math.sin(tangentAngle - spread);
+  const ax2 = x2 - ah * Math.cos(tangentAngle + spread);
+  const ay2 = y2 - ah * Math.sin(tangentAngle + spread);
+  const head = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  head.setAttribute('d', `M ${ax1.toFixed(1)} ${ay1.toFixed(1)} L ${x2.toFixed(1)} ${y2.toFixed(1)} L ${ax2.toFixed(1)} ${ay2.toFixed(1)}`);
+  head.setAttribute('stroke', color);
+  head.setAttribute('stroke-width', '2.6');
+  head.setAttribute('fill', 'none');
+  head.setAttribute('stroke-linecap', 'round');
+  head.setAttribute('stroke-linejoin', 'round');
+  head.setAttribute('opacity', '0.9');
+  svg.appendChild(head);
+}
+
+function renderDeltaMatrix(deltaMx) {
+  const wrap = el('div', { class: 'matrix-wrap' });
+  const table = el('table', { class: 'matrix delta-matrix' });
+  const thead = el('thead');
+  const hr = el('tr');
+  hr.appendChild(el('th', {}, 'Member'));
+  for (const a of ASSETS) hr.appendChild(el('th', {}, a));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = el('tbody');
+  for (const mem of MEMBERS) {
+    const tr = el('tr');
+    tr.appendChild(el('td', {}, mem));
+    for (const a of ASSETS) {
+      const v = deltaMx[mem][a];
+      const td = el('td', { class: 'cell' });
+      if (Math.abs(v) < 1e-9) {
+        td.classList.add('delta-zero');
+        td.appendChild(el('span', {}, '·'));
+      } else {
+        const sign = v > 0 ? '+' : '−';
+        td.classList.add(v > 0 ? 'delta-pos' : 'delta-neg');
+        td.appendChild(el('span', {}, sign + fmt(Math.abs(v))));
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderBalanceChanges(beforeMx, afterMx, opts = {}) {
+  const { target = null } = opts;
+  const wrap = el('div');
+
+  // Compute delta matrix
+  const deltaMx = emptyMatrix(true);
+  let nDeficitsBefore = 0, nDeficitsAfter = 0, nNewDeficits = 0, nResolved = 0;
+  for (const m of MEMBERS) for (const a of ASSETS) {
+    deltaMx[m][a] = afterMx[m][a] - beforeMx[m][a];
+    if (beforeMx[m][a] < 0) nDeficitsBefore++;
+    if (afterMx[m][a] < 0) nDeficitsAfter++;
+    if (beforeMx[m][a] < 0 && afterMx[m][a] >= 0) nResolved++;
+    if (beforeMx[m][a] >= 0 && afterMx[m][a] < 0) nNewDeficits++;
+  }
+  const changed = diffCells(beforeMx, afterMx);
+  // Side-effects = changed cells that aren't the target
+  const sideEffects = target ? changed.filter(k => k !== target) : [];
+
+  // ① Before
+  const lbl1 = el('div', { class: 'phase-label phase-before' });
+  lbl1.appendChild(el('span', { class: 'marker' }, '1'));
+  lbl1.appendChild(document.createTextNode('Current balance'));
+  if (target) {
+    lbl1.appendChild(el('span', { class: 'hint' }, 'resolving ' + target.replace('.', '·') + ' · ' + sideEffects.length + ' side-effects'));
+  } else {
+    lbl1.appendChild(el('span', { class: 'hint' }, nDeficitsBefore + ' deficit cell' + (nDeficitsBefore !== 1 ? 's' : '')));
+  }
+  wrap.appendChild(lbl1);
+  wrap.appendChild(renderMatrix({ matrix: beforeMx, compact: true, target, sideEffects }));
+
+  // ② Delta
+  const lbl2 = el('div', { class: 'phase-label phase-delta' });
+  lbl2.appendChild(el('span', { class: 'marker' }, '2'));
+  lbl2.appendChild(document.createTextNode('Diff to apply'));
+  lbl2.appendChild(el('span', { class: 'hint' }, changed.length + ' cell' + (changed.length !== 1 ? 's' : '') + ' will change'));
+  wrap.appendChild(lbl2);
+  wrap.appendChild(renderDeltaMatrix(deltaMx));
+
+  // ③ Result
+  const lbl3 = el('div', { class: 'phase-label phase-result' });
+  lbl3.appendChild(el('span', { class: 'marker' }, '3'));
+  lbl3.appendChild(document.createTextNode('Result'));
+  let hint = '';
+  if (nResolved > 0) hint += '✓ ' + nResolved + ' resolved';
+  if (nNewDeficits > 0) hint += (hint ? ' · ' : '') + '⚠ ' + nNewDeficits + ' new deficit';
+  if (!hint) hint = 'no change';
+  lbl3.appendChild(el('span', { class: 'hint' }, hint));
+  wrap.appendChild(lbl3);
+
+  // Compute resolved cells (deficit → non-negative) and new-deficit cells (was OK → now negative)
+  const resolvedCells = [];
+  const newDeficitCells = [];
+  for (const m of MEMBERS) for (const a of ASSETS) {
+    if (beforeMx[m][a] < 0 && afterMx[m][a] >= 0) resolvedCells.push(`${m}.${a}`);
+    if (beforeMx[m][a] >= 0 && afterMx[m][a] < 0) newDeficitCells.push(`${m}.${a}`);
+  }
+
+  const resultTopLabel = resolvedCells.length > 0
+    ? { cells: resolvedCells, label: '<span class="emoji">✓</span>Resolved! Deficit cleared', color: 'emerald' }
+    : null;
+  const resultBottomLabel = newDeficitCells.length > 0
+    ? { cells: newDeficitCells, label: '<span class="emoji">⚠</span>Newly generated deficit — handled in next iteration', color: 'red' }
+    : null;
+
+  wrap.appendChild(renderMatrix({
+    matrix: afterMx,
+    compact: true,
+    highlight: changed,
+    resolved: resolvedCells,
+    topLabel: resultTopLabel,
+    bottomLabel: resultBottomLabel
+  }));
+
+  return wrap;
+}
+
+function renderTradeList(opts = {}) {
+  const { focusTradeId = null, showStatus = false } = opts;
+  const list = el('div', { class: 'trade-list' });
+  for (const t of TRADES) {
+    const card = el('div', { class: 'trade-card' + (t.id === focusTradeId ? ' focus' : '') });
+    card.appendChild(el('div', { class: 'trade-id' }, '#' + t.id));
+    card.appendChild(el('div', { class: 'trade-time' }, t.time.substring(3)));
+    const flow = el('div', { class: 'trade-flow' });
+    flow.appendChild(el('span', { class: 'who' }, t.buyer));
+    flow.appendChild(el('span', { class: 'amt' }, '+' + t.baseQty + ' ' + t.base));
+    flow.appendChild(el('span', { class: 'arrow' }, '↔'));
+    flow.appendChild(el('span', { class: 'amt pay' }, t.quoteQty + ' ' + t.quote));
+    flow.appendChild(el('span', { class: 'who' }, t.seller));
+    card.appendChild(flow);
+    card.appendChild(el('div', { class: 'trade-pair' }, t.pair));
+    if (showStatus) {
+      const st = FINAL_STATUS[t.id].status;
+      const statusEl = el('div', { class: 'trade-status' });
+      statusEl.appendChild(el('span', { class: 'pill ' + st.toLowerCase() }, st));
+      card.appendChild(statusEl);
+    } else {
+      card.appendChild(el('div', { class: 'trade-status' }));
+    }
+    list.appendChild(card);
+  }
+  return list;
+}
+
+// ============ STEP DEFINITIONS ============
+const STEPS = [
+  // ----- 1: WELCOME -----
+  {
+    name: 'Welcome',
+    render() {
+      const v = el('div', { class: 'hero' });
+      v.appendChild(el('div', { class: 'hero-icon' }, '◈'));
+      v.appendChild(el('h1', {}, 'Multilateral Settlement, Step by Step'));
+      v.appendChild(el('p', {}, 'Watch how 10 trades between 6 members settle into 22 instructions across 3 independent batches — with 3 trades pushed to the next window.'));
+      v.appendChild(el('p', {}, 'Every step shows what changed and explains why.'));
+      const tip = el('div', { class: 'tip' });
+      tip.appendChild(document.createTextNode('Press '));
+      tip.appendChild(el('span', { class: 'kbd' }, 'Next →'));
+      tip.appendChild(document.createTextNode(' or use '));
+      tip.appendChild(el('span', { class: 'kbd' }, '←'));
+      tip.appendChild(document.createTextNode(' '));
+      tip.appendChild(el('span', { class: 'kbd' }, '→'));
+      tip.appendChild(document.createTextNode(' to navigate'));
+      v.appendChild(tip);
+      return v;
+    },
+    info: {
+      tag: 'INTRO',
+      what: 'A walkthrough of the engine\'s six-stage pipeline using the <code>small-sample</code> dataset.',
+      why: 'Settlement is multilateral: every trade depends on every other through the shared ledger. The engine has to honour LIFO unwinding, strict FIFO settlement, and per-asset dust thresholds — all at once.',
+      detail: '<ul><li><strong>Inputs:</strong> 6 members · 6 assets · 10 trades</li><li><strong>Output:</strong> 22 instructions in 3 batches + 3 deferred trades</li><li><strong>Convergence:</strong> 5 iterations</li></ul>'
+    }
+  },
+
+  // ----- 2: MEMBERS / LEDGER -----
+  {
+    name: 'The members',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Six members, six assets'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Opening balances at the start of the settlement window — rows are members, columns are assets'));
+
+      const wrap = el('div', { class: 'matrix-wrap' });
+      const table = el('table', { class: 'matrix ledger-table' });
+      const thead = el('thead');
+      const hr = el('tr');
+      hr.appendChild(el('th', {}, 'Member'));
+      hr.appendChild(el('th', { class: 'mem-tier' }, 'Tier'));
+      for (const a of ASSETS) hr.appendChild(el('th', {}, a));
+      thead.appendChild(hr);
+      table.appendChild(thead);
+
+      const tbody = el('tbody');
+      for (const mem of MEMBERS) {
+        const tr = el('tr');
+        tr.appendChild(el('td', {}, mem));
+        const tdTier = el('td', { class: 'mem-tier' });
+        tdTier.appendChild(el('span', { class: 'tier ' + TIERS[mem].toLowerCase() }, TIERS[mem]));
+        tr.appendChild(tdTier);
+        for (const a of ASSETS) {
+          const val = OPENING[mem][a];
+          const td = el('td', { class: 'cell' });
+          if (val === null || val === undefined) {
+            td.classList.add('empty');
+            td.appendChild(el('span', {}, '–'));
+          } else {
+            td.appendChild(el('span', {}, String(val)));
+          }
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      v.appendChild(wrap);
+      return v;
+    },
+    info: {
+      tag: 'INPUT · ledger.csv',
+      what: 'Each member holds some quantity of each asset. A dash (–) means they don\'t hold that asset at all.',
+      why: 'These opening balances are the constraint: a member can only deliver what they own (plus what they\'re receiving in the same window).',
+      detail: '<p>Tiers (<span class="pill" style="background:rgba(34,211,238,0.15);color:var(--cyan)">T1</span> / <span class="pill" style="background:rgba(167,139,250,0.15);color:var(--violet)">T2</span>) classify member type but don\'t change settlement logic in this dataset.</p>'
+    }
+  },
+
+  // ----- 3: THE TRADES (blotter view) -----
+  {
+    name: 'Trade blotter',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Trade blotter'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'One row per executed trade · 10 trades in execution order'));
+
+      const wrap = el('div', { class: 'matrix-wrap' });
+      const table = el('table', { class: 'blotter-table' });
+      const thead = el('thead');
+      const hr = el('tr');
+      [
+        ['#','col-id'],
+        ['Time','col-time'],
+        ['Instrument','col-instrument'],
+        ['Quantity','col-qty'],
+        ['Price','col-price'],
+        ['Notional','col-notional'],
+        ['Buyer','col-member'],
+        ['Seller','col-counterparty']
+      ].forEach(([h, cls]) => hr.appendChild(el('th', { class: cls }, h)));
+      thead.appendChild(hr);
+      table.appendChild(thead);
+
+      const tbody = el('tbody');
+      for (let i = 0; i < TRADES.length; i++) {
+        const t = TRADES[i];
+        const price = (t.quoteQty / t.baseQty);
+        const priceStr = (price % 1 === 0 ? price : price.toFixed(2)) + ' ' + t.quote + '/' + t.base;
+        const notionalStr = t.quoteQty + ' ' + t.quote;
+
+        const tr = el('tr');
+        tr.appendChild(el('td', { class: 'col-id' }, '#' + t.id));
+        tr.appendChild(el('td', { class: 'col-time' }, t.time.substring(3)));
+        tr.appendChild(el('td', { class: 'col-instrument' }, t.pair));
+        tr.appendChild(el('td', { class: 'col-qty' }, t.baseQty + ' ' + t.base));
+        tr.appendChild(el('td', { class: 'col-price' }, priceStr));
+        tr.appendChild(el('td', { class: 'col-notional' }, notionalStr));
+        const buyTd = el('td', { class: 'col-member' });
+        buyTd.appendChild(el('span', { class: 'side-pill side-buy' }, 'BUY'));
+        buyTd.appendChild(document.createTextNode(' ' + t.buyer));
+        tr.appendChild(buyTd);
+        const sellTd = el('td', { class: 'col-counterparty' });
+        sellTd.appendChild(el('span', { class: 'side-pill side-sell' }, 'SELL'));
+        sellTd.appendChild(document.createTextNode(' ' + t.seller));
+        tr.appendChild(sellTd);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      v.appendChild(wrap);
+      return v;
+    },
+    info: {
+      tag: 'INPUT · trades.csv',
+      what: 'One row per executed trade. The <strong>Buyer</strong> pays the notional and receives the quantity; the <strong>Seller</strong> does the opposite.',
+      why: 'A traditional blotter view groups buyer and seller into a single record per fill — easy to scan and matches how trades land in <code>trades.csv</code>.',
+      detail: '<p>Price = quote per unit base · Notional = total quote value. Buyer pays notional in <code>quote</code> currency and receives <code>quantity</code> in <code>base</code>.</p>'
+    }
+  },
+
+  // ----- 4: TRADE FLOW (card view) -----
+  {
+    name: 'Trade flow',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, '10 trades, in execution order'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'The same trades shown as flow cards · buyer receives base ←→ pays quote · seller does the opposite'));
+      v.appendChild(renderTradeList());
+      return v;
+    },
+    info: {
+      tag: 'INPUT · trade flow',
+      what: 'Same 10 trades, shown as flow cards. Each card emphasises what changes hands between the two counterparties.',
+      why: 'Execution time matters twice: <strong>LIFO unwinding</strong> reverses the newest trade first, and <strong>strict FIFO</strong> defers any later trade once an earlier one is partial. Seeing trades side-by-side makes overlapping member exposures obvious.',
+      detail: '<p>Notice T8 and T9 share a timestamp (08:00:01.496) — when ties happen, original input order breaks the tie.</p>'
+    }
+  },
+
+  // ----- 4: ANATOMY OF A TRADE -----
+  {
+    name: 'Anatomy of a trade',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'How one trade moves balances'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Trade #1 · Alice buys 10 BTC from Bob @ 5 ETH each'));
+
+      const anatomy = el('div', { class: 'anatomy' });
+      const left = el('div', { class: 'anatomy-party' });
+      left.appendChild(el('div', { class: 'role' }, 'Buyer'));
+      left.appendChild(el('div', { class: 'who' }, 'Alice'));
+      const flowsL = el('div', { class: 'flows' });
+      const fL1 = el('div', { class: 'flow gain' });
+      fL1.appendChild(el('span', {}, '+10 BTC'));
+      fL1.appendChild(el('span', {}, 'gain'));
+      flowsL.appendChild(fL1);
+      const fL2 = el('div', { class: 'flow lose' });
+      fL2.appendChild(el('span', {}, '−50 ETH'));
+      fL2.appendChild(el('span', {}, 'pay'));
+      flowsL.appendChild(fL2);
+      left.appendChild(flowsL);
+
+      const bridge = el('div', { class: 'anatomy-bridge' });
+      bridge.appendChild(el('div', { class: 'pair' }, 'BTC ↔ ETH'));
+      bridge.appendChild(el('div', { class: 'arrow' }, '⇄'));
+      bridge.appendChild(el('div', { class: 'ratio' }, '1 BTC = 5 ETH'));
+
+      const right = el('div', { class: 'anatomy-party' });
+      right.appendChild(el('div', { class: 'role' }, 'Seller'));
+      right.appendChild(el('div', { class: 'who' }, 'Bob'));
+      const flowsR = el('div', { class: 'flows' });
+      const fR1 = el('div', { class: 'flow lose' });
+      fR1.appendChild(el('span', {}, '−10 BTC'));
+      fR1.appendChild(el('span', {}, 'deliver'));
+      flowsR.appendChild(fR1);
+      const fR2 = el('div', { class: 'flow gain' });
+      fR2.appendChild(el('span', {}, '+50 ETH'));
+      fR2.appendChild(el('span', {}, 'receive'));
+      flowsR.appendChild(fR2);
+      right.appendChild(flowsR);
+
+      anatomy.appendChild(left);
+      anatomy.appendChild(bridge);
+      anatomy.appendChild(right);
+      v.appendChild(anatomy);
+
+      const insight = el('div', { class: 'insight' });
+      insight.innerHTML = 'For every trade, the engine applies exactly <strong>four flows</strong> to the netting matrix:<br>buyer·base ↑ &nbsp; buyer·quote ↓ &nbsp; seller·base ↓ &nbsp; seller·quote ↑';
+      v.appendChild(insight);
+      return v;
+    },
+    info: {
+      tag: 'STEP 1 · Netting basics',
+      what: 'For trade #1, Alice gains 10 BTC and pays 50 ETH; Bob does the opposite. Four ledger cells move.',
+      why: 'Settlement creates no value — it just moves it. The four flows always balance, so the system\'s total holdings of each asset are unchanged by any trade.',
+      detail: '<p>Bob doesn\'t actually own 10 BTC (opening: 0). The engine doesn\'t care yet — it just records intent. Reality is checked in the next step.</p>'
+    }
+  },
+
+  // ----- 5: NET EVERYTHING (full netting + deficits) -----
+  {
+    name: 'Net everything',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Apply all 10 trades — and meet the deficits'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Each cell shows opening → net position after every trade flow is applied'));
+      const opening = openingMatrix();
+      const netted = fullyNettedMatrix();
+      v.appendChild(renderMatrix({ matrix: netted, openingMx: opening }));
+      const insight = el('div', { class: 'insight' });
+      insight.innerHTML = '<strong>Four cells are negative.</strong> These members agreed to deliver more than they own (or will receive). They are the deficits that need resolving.';
+      v.appendChild(insight);
+      return v;
+    },
+    info: {
+      tag: 'STEP 1 · Net positions',
+      what: 'After applying all four flows of all 10 trades, four cells are negative — the deficits.',
+      why: 'Netting is essential: a member may be short on one trade but receive that same asset on another. We only need to act on the <strong>true</strong> shortfalls, not every individual obligation.',
+      detail: `<ul>
+        <li><span class="pill deferred">Bob · BTC</span> short 10 (only trade: T1 sells 10 BTC he doesn't have)</li>
+        <li><span class="pill deferred">Bob · USDT</span> short 100 (T6 pays 200, T9 receives 100)</li>
+        <li><span class="pill deferred">Dave · BTC</span> short 3 (T2 sells 5, owns only 2)</li>
+        <li><span class="pill deferred">Eve · ETH</span> short 5 (T6 sells 10, owns only 5)</li>
+      </ul>`
+    }
+  },
+
+  // ----- 6: REVERSE T1 (full reversal for Bob's BTC) -----
+  {
+    name: 'Resolve · Bob\'s BTC',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Resolve the first deficit'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Bob is short 10 BTC. His only BTC liability is T1. Fully reverse T1.'));
+
+      // Math
+      const math = el('div', { class: 'math-card' });
+      math.appendChild(el('h3', {}, '⊘  T1 reversal — Alice buys 10 BTC from Bob @ 50 ETH'));
+      const r1 = el('div', { class: 'math-row' });
+      r1.appendChild(el('div', { class: 'label' }, 'Original T1'));
+      r1.appendChild(el('div', { class: 'base' }, '10 BTC'));
+      r1.appendChild(el('div', { class: 'quote' }, '50 ETH'));
+      math.appendChild(r1);
+      const r2 = el('div', { class: 'math-row calc' });
+      r2.appendChild(el('div', { class: 'label' }, 'Deficit equals full base side'));
+      r2.appendChild(el('div', { class: 'base' }, '= 10 BTC'));
+      r2.appendChild(el('div', { class: 'quote' }, ''));
+      math.appendChild(r2);
+      const r3 = el('div', { class: 'math-row deferred' });
+      r3.appendChild(el('div', { class: 'label' }, 'Reverse fully → DEFERRED'));
+      r3.appendChild(el('div', { class: 'base' }, '−10 BTC'));
+      r3.appendChild(el('div', { class: 'quote' }, '−50 ETH'));
+      math.appendChild(r3);
+      const r4 = el('div', { class: 'math-row result' });
+      r4.appendChild(el('div', { class: 'label' }, 'Settles this window'));
+      r4.appendChild(el('div', { class: 'base' }, '0 BTC'));
+      r4.appendChild(el('div', { class: 'quote' }, '0 ETH'));
+      math.appendChild(r4);
+      v.appendChild(math);
+
+      // Balance-change diff table — Bob.BTC is the deficit being resolved
+      const before = fullyNettedMatrix();
+      const after = matrixAfterT1Reversal();
+      v.appendChild(renderBalanceChanges(before, after, { target: 'Bob.BTC' }));
+
+      return v;
+    },
+    info: {
+      tag: 'STEP 2 · LIFO unwind',
+      what: 'T1 is fully reversed — Alice no longer receives 10 BTC, Bob no longer pays 50 ETH. Bob\'s BTC deficit is gone.',
+      why: '<strong>Why fully?</strong> Bob\'s only BTC obligation is T1. Reversing anything less wouldn\'t cover his 10 BTC shortfall.<br><br><strong>Why newest first?</strong> LIFO unwinding preserves earlier commitments — the market expects them to be honoured first.',
+      detail: '<p>Affected cells: Alice·BTC drops by 10, Alice·ETH gains 50 back, Bob·BTC clears to 0, Bob·ETH drops by 50.</p><p>T1 → <span class="pill deferred">DEFERRED</span></p>'
+    }
+  },
+
+  // ----- 7: PARTIAL REVERSAL (T2 for Dave's BTC) -----
+  {
+    name: 'Resolve · Dave\'s BTC',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'A partial reversal — preserve the price'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Dave is short only 3 of the 5 BTC he agreed to deliver. Unwind 3 BTC of T2 — and scale the quote proportionally.'));
+
+      const math = el('div', { class: 'math-card' });
+      math.appendChild(el('h3', {}, '⊘  T2 partial reversal — Charlie buys 5 BTC from Dave @ 25 ETH'));
+      const r1 = el('div', { class: 'math-row' });
+      r1.appendChild(el('div', { class: 'label' }, 'Original T2'));
+      r1.appendChild(el('div', { class: 'base' }, '5 BTC'));
+      r1.appendChild(el('div', { class: 'quote' }, '25 ETH'));
+      math.appendChild(r1);
+      const r2 = el('div', { class: 'math-row calc' });
+      r2.appendChild(el('div', { class: 'label' }, 'Reverse to cover deficit'));
+      r2.appendChild(el('div', { class: 'base' }, '3 BTC'));
+      r2.appendChild(el('div', { class: 'quote' }, '?'));
+      math.appendChild(r2);
+      const r3 = el('div', { class: 'math-row calc' });
+      r3.appendChild(el('div', { class: 'label' }, 'Scale by trade ratio · 3 × (25 / 5)'));
+      r3.appendChild(el('div', { class: 'base' }, ''));
+      r3.appendChild(el('div', { class: 'quote' }, '= 15 ETH'));
+      math.appendChild(r3);
+      const r4 = el('div', { class: 'math-row deferred' });
+      r4.appendChild(el('div', { class: 'label' }, 'Deferred portion'));
+      r4.appendChild(el('div', { class: 'base' }, '3 BTC'));
+      r4.appendChild(el('div', { class: 'quote' }, '15 ETH'));
+      math.appendChild(r4);
+      const r5 = el('div', { class: 'math-row result' });
+      r5.appendChild(el('div', { class: 'label' }, 'Settles this window'));
+      r5.appendChild(el('div', { class: 'base' }, '2 BTC'));
+      r5.appendChild(el('div', { class: 'quote' }, '10 ETH'));
+      math.appendChild(r5);
+      v.appendChild(math);
+
+      const before = matrixAfterT1Reversal();
+      const after = matrixAfterT1AndT2Partial();
+      v.appendChild(renderBalanceChanges(before, after, { target: 'Dave.BTC' }));
+
+      const insight = el('div', { class: 'insight' });
+      insight.innerHTML = '<strong>New deficit alert:</strong> reversing T2 also pulls 15 ETH back from Dave. Look for the <code>⚠ new deficit</code> badge on <code>Dave · ETH</code> — the engine will iterate again to clean it up.';
+      v.appendChild(insight);
+
+      return v;
+    },
+    info: {
+      tag: 'STEP 2 · Proportional unwind',
+      what: 'T2 is partially reversed by 3 BTC. The quote side scales proportionally to 15 ETH, keeping the original price exactly.',
+      why: 'A reversal must preserve the trade\'s agreed price. If we reversed 3 BTC but kept all 25 ETH being paid, Charlie would be paying 12.5 ETH per BTC instead of 5 — a different trade.',
+      detail: '<p>Formula: <code>quoteReversed = baseReversed × (tradeQuote / tradeBase)</code></p><p>T2 → <span class="pill partial">PARTIAL</span> (2 BTC ↔ 10 ETH this window)</p>'
+    }
+  },
+
+  // ----- DUST THRESHOLD DEMO -----
+  {
+    name: 'Dust threshold',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Dust threshold rules'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Reversals must never leave sub-dust amounts on either side. Two illustrative scenarios using BTC (dust 0.00000294) and USDT (dust 0.01).'));
+
+      // ============ Scenario A: settled too small → defer ============
+      const sa = el('div', { class: 'scenario-card' });
+      const saHeader = el('div', { class: 'scenario-header' });
+      saHeader.appendChild(el('span', { class: 'scenario-badge defer' }, 'Scenario A · Defer'));
+      saHeader.appendChild(el('span', { class: 'scenario-title' }, 'Settled side would be too small'));
+      sa.appendChild(saHeader);
+      sa.appendChild(el('div', { class: 'scenario-subtitle' }, 'Hypothetical trade: Alice buys 1 BTC from Bob @ 10 USDT. Bob is short 0.9999 BTC.'));
+
+      const saMath = el('div', { class: 'math-card', style: 'margin-bottom:0' });
+      saMath.appendChild(el('h3', {}, '⊘  Naive partial reversal'));
+      const saRow = (label, base, quote, cls = '') => {
+        const r = el('div', { class: 'math-row' + (cls ? ' ' + cls : '') });
+        r.appendChild(el('div', { class: 'label' }, label));
+        r.appendChild(el('div', { class: 'base' }, base));
+        r.appendChild(el('div', { class: 'quote' }, quote));
+        return r;
+      };
+      saMath.appendChild(saRow('Original trade', '1 BTC', '10 USDT'));
+      saMath.appendChild(saRow('Reverse to cover deficit', '0.9999 BTC', '?', 'calc'));
+      saMath.appendChild(saRow('Scale by ratio · 0.9999 × (10/1)', '', '= 9.999 USDT', 'calc'));
+      saMath.appendChild(saRow('Would-be settled', '0.0001 BTC', '0.001 USDT', 'result'));
+      sa.appendChild(saMath);
+
+      const saDust = el('div', { class: 'dust-check' });
+      saDust.appendChild(el('div', { class: 'dh' }, 'Side'));
+      saDust.appendChild(el('div', { class: 'dh' }, 'Settled amount'));
+      saDust.appendChild(el('div', { class: 'dh num' }, 'Dust limit'));
+      saDust.appendChild(el('div', { class: 'dh' }, 'Verdict'));
+      saDust.appendChild(el('div', { class: 'asset' }, 'BTC'));
+      saDust.appendChild(el('div', { class: 'desc' }, '0.0001 BTC settled'));
+      saDust.appendChild(el('div', { class: 'num' }, '0.00000294'));
+      saDust.appendChild(el('div', { class: 'verdict pass' }, '✓ above dust'));
+      saDust.appendChild(el('div', { class: 'asset' }, 'USDT'));
+      saDust.appendChild(el('div', { class: 'desc' }, '0.001 USDT settled'));
+      saDust.appendChild(el('div', { class: 'num' }, '0.01'));
+      saDust.appendChild(el('div', { class: 'verdict fail' }, '✗ sub-dust'));
+      sa.appendChild(saDust);
+
+      const saResult = el('div', { class: 'scenario-result defer' });
+      saResult.innerHTML = '<strong>→ Engine fully reverses the trade.</strong> Settling 0.001 USDT crumbs costs more than it moves. Trade goes <span class="pill deferred">DEFERRED</span>; the full 1 BTC ↔ 10 USDT rolls to the next window.';
+      sa.appendChild(saResult);
+      v.appendChild(sa);
+
+      // ============ Scenario B: deferred too small → widen ============
+      const sb = el('div', { class: 'scenario-card' });
+      const sbHeader = el('div', { class: 'scenario-header' });
+      sbHeader.appendChild(el('span', { class: 'scenario-badge widen' }, 'Scenario B · Widen'));
+      sbHeader.appendChild(el('span', { class: 'scenario-title' }, 'Deferred side would be too small'));
+      sb.appendChild(sbHeader);
+      sb.appendChild(el('div', { class: 'scenario-subtitle' }, 'Same trade, but Bob is short only 0.0001 BTC.'));
+
+      const sbMath = el('div', { class: 'math-card', style: 'margin-bottom:0' });
+      sbMath.appendChild(el('h3', {}, '⊘  Naive partial reversal'));
+      const sbRow = saRow;
+      sbMath.appendChild(sbRow('Original trade', '1 BTC', '10 USDT'));
+      sbMath.appendChild(sbRow('Reverse small slice', '0.0001 BTC', '0.001 USDT', 'calc'));
+      sbMath.appendChild(sbRow('Would-be deferred', '0.0001 BTC', '0.001 USDT', 'deferred'));
+      sb.appendChild(sbMath);
+
+      const sbDust = el('div', { class: 'dust-check' });
+      sbDust.appendChild(el('div', { class: 'dh' }, 'Side'));
+      sbDust.appendChild(el('div', { class: 'dh' }, 'Deferred amount'));
+      sbDust.appendChild(el('div', { class: 'dh num' }, 'Dust limit'));
+      sbDust.appendChild(el('div', { class: 'dh' }, 'Verdict'));
+      sbDust.appendChild(el('div', { class: 'asset' }, 'BTC'));
+      sbDust.appendChild(el('div', { class: 'desc' }, '0.0001 BTC deferred'));
+      sbDust.appendChild(el('div', { class: 'num' }, '0.00000294'));
+      sbDust.appendChild(el('div', { class: 'verdict pass' }, '✓ above dust'));
+      sbDust.appendChild(el('div', { class: 'asset' }, 'USDT'));
+      sbDust.appendChild(el('div', { class: 'desc' }, '0.001 USDT deferred'));
+      sbDust.appendChild(el('div', { class: 'num' }, '0.01'));
+      sbDust.appendChild(el('div', { class: 'verdict fail' }, '✗ sub-dust'));
+      sb.appendChild(sbDust);
+
+      const sbMath2 = el('div', { class: 'math-card', style: 'margin-top:12px; margin-bottom: 0; background: linear-gradient(135deg, var(--amber-soft), var(--emerald-soft));' });
+      sbMath2.appendChild(el('h3', {}, '↗  Widen the reversal until deferred side clears dust'));
+      sbMath2.appendChild(sbRow('Bind deferred USDT to dust', '', '0.01 USDT', 'calc'));
+      sbMath2.appendChild(sbRow('Derive base · 0.01 / 10', '0.001 BTC', '', 'calc'));
+      sbMath2.appendChild(sbRow('Adjusted settled', '0.999 BTC', '9.99 USDT', 'result'));
+      sbMath2.appendChild(sbRow('Adjusted deferred', '0.001 BTC', '0.01 USDT', 'deferred'));
+      sb.appendChild(sbMath2);
+
+      const sbResult = el('div', { class: 'scenario-result partial' });
+      sbResult.innerHTML = '<strong>→ Engine widens the reversal so both deferred legs clear dust.</strong> Trade settles as <span class="pill partial">PARTIAL</span>: 0.999 BTC ↔ 9.99 USDT this window; 0.001 BTC ↔ 0.01 USDT rolled forward — both above dust on every leg.';
+      sb.appendChild(sbResult);
+      v.appendChild(sb);
+
+      const insight = el('div', { class: 'insight' });
+      insight.innerHTML = '<strong>Invariant:</strong> every settlement leg the engine emits is either exactly zero or strictly above its asset\'s dust threshold. No tiny dribbles ever hit the ledger.';
+      v.appendChild(insight);
+      return v;
+    },
+    info: {
+      tag: 'STEP 2 · Dust handling',
+      what: 'Whenever a partial reversal would leave a sub-dust amount on the <strong>settled</strong> or <strong>deferred</strong> side, the engine adjusts: either fully defer the trade, or widen the reversal until both sides clear dust.',
+      why: 'Moving 0.001 USDT costs more in fees and operational overhead than the value moved. Sub-dust legs are pure noise. The engine guarantees they never appear in the output.',
+      detail: '<ul><li><strong>Case 1</strong> · Settled side would be sub-dust → fully reverse, mark <span class="pill deferred">DEFERRED</span>.</li><li><strong>Case 2</strong> · Deferred side would be sub-dust → widen the reversal so the deferred side clears dust on the binding leg, then re-scale the other side.</li><li>Dust thresholds in <code>small-sample</code>: BTC 2.94e-6 · USDT 0.01 · ADA 1 · ETH 1e-16</li></ul>'
+    }
+  },
+
+  // ----- STRICT FIFO DEMO -----
+  {
+    name: 'Strict FIFO',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Strict FIFO ordering — side-by-side'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Same T3 and T9 from small-sample. Compare what happens without FIFO (later trade jumps the queue) vs. with FIFO (commitment chain holds).'));
+
+      // ============= Side-by-side comparison =============
+      const comparison = el('div', { class: 'comparison' });
+
+      // ----- WITHOUT strict FIFO -----
+      const without = el('div', { class: 'comparison-side without' });
+      const wHeader = el('div', { class: 'comparison-header' });
+      wHeader.appendChild(el('span', { class: 'comparison-badge bad' }, '✗ Without strict FIFO'));
+      without.appendChild(wHeader);
+
+      // T3 partial
+      const t3w = el('div', { class: 'chain-step partial' });
+      const t3wRow = el('div', { class: 'step-row' });
+      t3wRow.appendChild(el('div', { class: 'trade-ref' }, 'T3'));
+      const t3wDesc = el('div', { class: 'trade-desc' });
+      t3wDesc.innerHTML = '<span class="who">Eve</span> buys 20 XRP from <span class="who">Charlie</span> @ 200 USDT';
+      t3wRow.appendChild(t3wDesc);
+      t3wRow.appendChild(el('span', { class: 'pill partial' }, 'PARTIAL'));
+      t3w.appendChild(t3wRow);
+      without.appendChild(t3w);
+
+      const narW = el('div', { class: 'comparison-narrative' });
+      narW.innerHTML = '<span class="arrow-icon">↓</span>Charlie can only give 10 XRP — so Eve only pays 100 USDT';
+      without.appendChild(narW);
+
+      // T9 fully settles (queue jump!)
+      const t9w = el('div', { class: 'chain-step full' });
+      const t9wRow = el('div', { class: 'step-row' });
+      t9wRow.appendChild(el('div', { class: 'trade-ref' }, 'T9'));
+      const t9wDesc = el('div', { class: 'trade-desc' });
+      t9wDesc.innerHTML = '<span class="who">Eve</span> buys 2 ADA from <span class="who">Bob</span> @ 100 USDT<br>Eve still has USDT balance → trade settles fully';
+      t9wRow.appendChild(t9wDesc);
+      t9wRow.appendChild(el('span', { class: 'pill full' }, 'FULL'));
+      t9w.appendChild(t9wRow);
+      without.appendChild(t9w);
+
+      const resW = el('div', { class: 'comparison-result bad' });
+      resW.innerHTML = '<strong>✗ Unfair:</strong> Bob (T9) gets paid in full, but Charlie (T3) only got half his USDT. A <em>later</em> trade jumped the queue past an earlier one — exactly what real markets refuse to accept.';
+      without.appendChild(resW);
+      comparison.appendChild(without);
+
+      // ----- WITH strict FIFO -----
+      const withF = el('div', { class: 'comparison-side with' });
+      const fHeader = el('div', { class: 'comparison-header' });
+      fHeader.appendChild(el('span', { class: 'comparison-badge good' }, '✓ With strict FIFO'));
+      withF.appendChild(fHeader);
+
+      const t3f = el('div', { class: 'chain-step partial' });
+      const t3fRow = el('div', { class: 'step-row' });
+      t3fRow.appendChild(el('div', { class: 'trade-ref' }, 'T3'));
+      const t3fDesc = el('div', { class: 'trade-desc' });
+      t3fDesc.innerHTML = '<span class="who">Eve</span> buys 20 XRP from <span class="who">Charlie</span> @ 200 USDT';
+      t3fRow.appendChild(t3fDesc);
+      t3fRow.appendChild(el('span', { class: 'pill partial' }, 'PARTIAL'));
+      t3f.appendChild(t3fRow);
+      withF.appendChild(t3f);
+
+      const narF = el('div', { class: 'comparison-narrative' });
+      narF.innerHTML = '<span class="arrow-icon">↓</span>Eve broke her USDT commitment in T3 →<br><span class="position-tag shared">Eve · USDT</span> marked deferred for the rest of the window';
+      withF.appendChild(narF);
+
+      const t9f = el('div', { class: 'chain-step dragged' });
+      const t9fRow = el('div', { class: 'step-row' });
+      t9fRow.appendChild(el('div', { class: 'trade-ref' }, 'T9'));
+      const t9fDesc = el('div', { class: 'trade-desc' });
+      t9fDesc.innerHTML = '<span class="who">Eve</span> buys 2 ADA from <span class="who">Bob</span> @ 100 USDT<br>Eve has 100 USDT in account · but FIFO drags this trade';
+      t9fRow.appendChild(t9fDesc);
+      t9fRow.appendChild(el('span', { class: 'pill deferred' }, 'DEFERRED'));
+      t9f.appendChild(t9fRow);
+      withF.appendChild(t9f);
+
+      const resF = el('div', { class: 'comparison-result good' });
+      resF.innerHTML = '<strong>✓ Fair:</strong> Both Charlie and Bob wait their turn. Earlier commitments are honoured before later ones — even when a later trade could individually settle.';
+      withF.appendChild(resF);
+      comparison.appendChild(withF);
+
+      v.appendChild(comparison);
+
+      // ============= Step-by-step narrative =============
+      const narrative = el('div', { class: 'scenario-card' });
+      const nHeader = el('div', { class: 'scenario-header' });
+      nHeader.appendChild(el('span', { class: 'scenario-badge drag' }, 'The chain of reasoning'));
+      nHeader.appendChild(el('span', { class: 'scenario-title' }, 'Why T9 has to defer even though Eve has USDT'));
+      narrative.appendChild(nHeader);
+
+      const nBody = el('div');
+      nBody.style.fontSize = '13px';
+      nBody.style.lineHeight = '1.7';
+      nBody.style.color = 'var(--text-1)';
+      nBody.innerHTML = `
+        <ol style="padding-left: 22px; margin: 6px 0 8px">
+          <li><strong>T3 is going to fail.</strong> Charlie can't deliver all 20 XRP to Eve — only 10 XRP will move.</li>
+          <li><strong>Therefore Eve is not going to pay all 200 USDT to Charlie</strong> — only the 100 USDT matching the 10 XRP she actually receives.</li>
+          <li><strong>Since Eve isn't paying her full USDT obligation in T3</strong>, her USDT-paying commitment is broken for the rest of the window.</li>
+          <li><strong>So Eve will not pay USDT for T9 either</strong>, and the engine defers T9 — even though Eve has 100 USDT sitting in her account.</li>
+        </ol>
+        <p style="margin-top: 10px"><strong>The key insight:</strong> settlement is about <em>commitments</em>, not just balances. Once a commitment chain breaks, every link after it has to wait too — that's strict FIFO.</p>
+      `;
+      narrative.appendChild(nBody);
+      v.appendChild(narrative);
+
+      return v;
+    },
+    info: {
+      tag: 'STEP 3 · FIFO knock-on',
+      what: 'After every resolution pass, the engine walks trades in execution order. When trade T<sub>n</sub> is partial, the <code>(buyer·quote)</code> and <code>(seller·base)</code> keys are added to a "deferred set". Every later trade touching one of those keys is then <strong>fully deferred</strong>.',
+      why: '<strong>Fairness.</strong> Without FIFO, T9 could settle in full while T3 — executed earlier — only got half. Markets won\'t accept a later trade jumping the queue past an earlier partial commitment. Strict FIFO enforces that.',
+      detail: '<p>In <code>small-sample</code>: T3 partial → <code>Eve·USDT</code> deferred → T9 dragged into <span class="pill deferred">DEFERRED</span>. The validator (<code>cmd/validator</code>) checks this invariant after every run — if it ever broke, the run would fail loudly.</p>'
+    }
+  },
+
+  // ----- 8: CASCADE + FIFO + CONVERGENCE -----
+  {
+    name: 'Cascade & FIFO',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Iterate until convergence'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Each reversal can create new deficits and trigger FIFO knock-on. The engine loops until every cell is non-negative.'));
+
+      // Iteration strip
+      const strip = el('div', { class: 'iter-strip' });
+      for (let i = 1; i <= 5; i++) {
+        const b = el('div', { class: 'iter-badge done' });
+        b.appendChild(el('span', { class: 'num' }, 'iter ' + i));
+        const labels = ['initial deficits', 'cascade A', 'cascade B', 'FIFO sweep', 'converged ✓'];
+        b.appendChild(document.createTextNode(labels[i-1]));
+        strip.appendChild(b);
+      }
+      v.appendChild(strip);
+
+      const final = finalSettledMatrix();
+      const opening = openingMatrix();
+      v.appendChild(renderMatrix({ matrix: final, openingMx: opening }));
+
+      const insight = el('div', { class: 'insight' });
+      insight.innerHTML = `<strong>FIFO knock-on:</strong> When <code>T6</code> ends up deferred, Bob\'s <code>(buyer, USDT)</code> position is marked partial. Later trade <code>T9</code> also has Bob as USDT-paying buyer — so it gets fully dragged into deferral, even though Bob\'s USDT balance alone could have covered it. Earlier commitments come first.`;
+      v.appendChild(insight);
+      return v;
+    },
+    info: {
+      tag: 'STEPS 2-3 · Convergence loop',
+      what: 'After 5 iterations, every netted cell is ≥ 0. Some trades settled in full, some partial, three fully deferred.',
+      why: 'Each reversal undoes a portion of trade flows, which can push other cells negative. The engine alternates resolution and FIFO knock-on until no negatives remain.',
+      detail: `<ul>
+        <li><strong>LIFO unwind</strong> — newest trade reversed first per deficit</li>
+        <li><strong>Strict FIFO</strong> — once an earlier trade for a position is partial, all later trades on that position are deferred</li>
+        <li><strong>Dust rules</strong> — if a partial would leave sub-dust crumbs, expand to a full reversal instead</li>
+      </ul>`
+    }
+  },
+
+  // ----- 9: CLASSIFICATION -----
+  {
+    name: 'Classify',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Classify each trade'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'FULL · PARTIAL · DEFERRED — based on what settled vs. what rolls forward'));
+
+      const stats = el('div', { class: 'stats' });
+      const s1 = el('div', { class: 'stat-card total' });
+      s1.appendChild(el('div', { class: 'val' }, '10'));
+      s1.appendChild(el('div', { class: 'lbl' }, 'Trades'));
+      stats.appendChild(s1);
+      const s2 = el('div', { class: 'stat-card full' });
+      s2.appendChild(el('div', { class: 'val' }, '2'));
+      s2.appendChild(el('div', { class: 'lbl' }, 'Full'));
+      stats.appendChild(s2);
+      const s3 = el('div', { class: 'stat-card partial' });
+      s3.appendChild(el('div', { class: 'val' }, '5'));
+      s3.appendChild(el('div', { class: 'lbl' }, 'Partial'));
+      stats.appendChild(s3);
+      const s4 = el('div', { class: 'stat-card deferred' });
+      s4.appendChild(el('div', { class: 'val' }, '3'));
+      s4.appendChild(el('div', { class: 'lbl' }, 'Deferred'));
+      stats.appendChild(s4);
+      v.appendChild(stats);
+
+      v.appendChild(renderTradeList({ showStatus: true }));
+      return v;
+    },
+    info: {
+      tag: 'STEP 4 · Classification',
+      what: 'Each trade gets one of three labels based on its remaining settled quantity after convergence.',
+      why: `<ul>
+        <li><span class="pill full">FULL</span> — settled quantity equals original; deferred portion is zero or sub-dust on both sides.</li>
+        <li><span class="pill partial">PARTIAL</span> — settled and deferred portions are both above dust.</li>
+        <li><span class="pill deferred">DEFERRED</span> — nothing settled; or the settled portion is sub-dust.</li>
+      </ul>`,
+      detail: '<p>The <strong>deferred portions</strong> (10 BTC ↔ 50 ETH of T1, etc.) become input to the next settlement window — no value is lost, just delayed.</p>'
+    }
+  },
+
+  // ----- 10: INSTRUCTIONS -----
+  {
+    name: 'Instructions',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Emit settlement instructions'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'For every (member, asset) where opening ≠ closing, write one IN or OUT instruction.'));
+
+      const stats = el('div', { class: 'stats' });
+      const s1 = el('div', { class: 'stat-card total' });
+      s1.appendChild(el('div', { class: 'val' }, '22'));
+      s1.appendChild(el('div', { class: 'lbl' }, 'Instructions'));
+      stats.appendChild(s1);
+      let inCount = 0, outCount = 0;
+      BATCHES.forEach(b => b.instructions.forEach(i => i.direction === 'IN' ? inCount++ : outCount++));
+      const s2 = el('div', { class: 'stat-card full' });
+      s2.appendChild(el('div', { class: 'val' }, String(inCount)));
+      s2.appendChild(el('div', { class: 'lbl' }, 'IN'));
+      stats.appendChild(s2);
+      const s3 = el('div', { class: 'stat-card' });
+      s3.appendChild(el('div', { class: 'val', style: 'color:var(--blue)' }, String(outCount)));
+      s3.appendChild(el('div', { class: 'lbl' }, 'OUT'));
+      stats.appendChild(s3);
+      const s4 = el('div', { class: 'stat-card total' });
+      s4.appendChild(el('div', { class: 'val' }, '3'));
+      s4.appendChild(el('div', { class: 'lbl' }, 'Batches'));
+      stats.appendChild(s4);
+      v.appendChild(stats);
+
+      // Table merging all instructions with batch grouping
+      for (const batch of BATCHES) {
+        const hdr = el('div', { class: 'batch-header' });
+        hdr.appendChild(el('span', { class: 'name' }, 'Batch ' + batch.id));
+        hdr.appendChild(el('span', { class: 'meta' }, '· trades ' + batch.trades.join(', ') + ' · ' + batch.instructions.length + ' instructions'));
+        v.appendChild(hdr);
+
+        const t = el('table', { class: 'inst-table' });
+        const th = el('thead');
+        const thr = el('tr');
+        ['Member','Asset','Opening','Δ','Direction','Closing'].forEach(h => thr.appendChild(el('th', {}, h)));
+        th.appendChild(thr);
+        t.appendChild(th);
+        const tb = el('tbody');
+        for (const inst of batch.instructions) {
+          const tr = el('tr');
+          tr.appendChild(el('td', {}, inst.member));
+          tr.appendChild(el('td', {}, inst.asset));
+          tr.appendChild(el('td', { class: 'num' }, String(inst.opening)));
+          const dCls = inst.direction === 'IN' ? 'delta-in' : 'delta-out';
+          tr.appendChild(el('td', { class: 'num ' + dCls }, (inst.direction === 'IN' ? '+' : '−') + inst.delta));
+          tr.appendChild(el('td', {}, el('span', { class: 'pill ' + inst.direction.toLowerCase() }, inst.direction)));
+          tr.appendChild(el('td', { class: 'num' }, String(inst.closing)));
+          tb.appendChild(tr);
+        }
+        t.appendChild(tb);
+        v.appendChild(t);
+      }
+      return v;
+    },
+    info: {
+      tag: 'STEP 5 · Instructions',
+      what: 'The engine recomputes the netting matrix using the <em>settled</em> quantities (not the original ones), then emits one instruction per non-zero net change.',
+      why: 'These are what actually moves on the ledger. <span class="pill in">IN</span> increases the holding; <span class="pill out">OUT</span> decreases it. Cells where opening equals closing produce no instruction — they\'re already balanced.',
+      detail: '<p>22 instructions total: 11 <span class="pill in">IN</span> and 11 <span class="pill out">OUT</span>. They balance because settlement moves value, doesn\'t create it.</p>'
+    }
+  },
+
+  // ----- 11: BATCH SPLITTING (SVG graph) -----
+  {
+    name: 'Batch splitting',
+    render() {
+      const v = el('div');
+      v.appendChild(el('div', { class: 'viz-title' }, 'Split into independent batches'));
+      v.appendChild(el('div', { class: 'viz-subtitle' }, 'Union-find on (member, asset) keys groups the trades into connected components. Each batch can settle atomically and in parallel.'));
+
+      // Build SVG visualization
+      const W = 1100, H = 580;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('class', 'batch-graph');
+      svg.setAttribute('width', '100%');
+
+      // Three batch background regions
+      const batchBgs = [
+        { cls: 'b1', x: 30, y: 60, w: 600, h: 320, title: 'Batch 1 · trades 4, 8, 10' },
+        { cls: 'b2', x: 660, y: 60, w: 410, h: 220, title: 'Batch 2 · trade 3' },
+        { cls: 'b3', x: 100, y: 410, w: 970, h: 150, title: 'Batch 3 · trades 2, 5, 7' }
+      ];
+      for (const bg of batchBgs) {
+        const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        r.setAttribute('class', 'batch-bg ' + bg.cls);
+        r.setAttribute('x', bg.x); r.setAttribute('y', bg.y);
+        r.setAttribute('width', bg.w); r.setAttribute('height', bg.h);
+        r.setAttribute('rx', 16);
+        svg.appendChild(r);
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('class', 'batch-title ' + bg.cls);
+        t.setAttribute('x', bg.x + 16);
+        t.setAttribute('y', bg.y - 10);
+        t.textContent = bg.title;
+        svg.appendChild(t);
+      }
+
+      // Layout: positions for nodes and trade junctions
+      // Batch 1 nodes: Alice·ADA, Alice·BNB, Dave·ADA, Dave·BNB, Eve·ADA, Eve·BNB, Eve·BTC, Frank·BNB, Frank·BTC
+      // Trade junctions: T4, T8, T10
+      const nodes = {
+        // Batch 1
+        'Alice·ADA':   { x: 100, y: 130, batch: 'b1' },
+        'Alice·BNB':   { x: 100, y: 220, batch: 'b1' },
+        'Dave·ADA':    { x: 260, y: 130, batch: 'b1' },
+        'Dave·BNB':    { x: 260, y: 320, batch: 'b1' },
+        'Eve·ADA':     { x: 420, y: 130, batch: 'b1' },
+        'Eve·BNB':     { x: 420, y: 220, batch: 'b1' },
+        'Eve·BTC':     { x: 420, y: 320, batch: 'b1' },
+        'Frank·BNB':   { x: 580, y: 220, batch: 'b1' },
+        'Frank·BTC':   { x: 580, y: 320, batch: 'b1' },
+        // Batch 2
+        'Eve·XRP':     { x: 720, y: 140, batch: 'b2' },
+        'Eve·USDT':    { x: 720, y: 230, batch: 'b2' },
+        'Charlie·XRP': { x: 1020, y: 140, batch: 'b2' },
+        'Charlie·USDT':{ x: 1020, y: 230, batch: 'b2' },
+        // Batch 3
+        'Charlie·BTC': { x: 150, y: 460, batch: 'b3' },
+        'Charlie·ETH': { x: 150, y: 520, batch: 'b3' },
+        'Dave·BTC':    { x: 340, y: 460, batch: 'b3' },
+        'Dave·ETH':    { x: 340, y: 520, batch: 'b3' },
+        'Frank·ETH':   { x: 530, y: 460, batch: 'b3' },
+        'Frank·XRP':   { x: 530, y: 520, batch: 'b3' },
+        'Dave·XRP':    { x: 720, y: 460, batch: 'b3' },
+        'Dave·USDT':   { x: 720, y: 520, batch: 'b3' },
+        'Alice·XRP':   { x: 900, y: 460, batch: 'b3' },
+        'Alice·USDT':  { x: 900, y: 520, batch: 'b3' }
+      };
+      const trades = {
+        'T4':  { x: 340, y: 175, members: ['Dave·ADA','Dave·BNB','Eve·ADA','Eve·BNB'] },
+        'T8':  { x: 180, y: 175, members: ['Alice·ADA','Alice·BNB','Dave·ADA','Dave·BNB'] },
+        'T10': { x: 500, y: 270, members: ['Eve·BTC','Eve·BNB','Frank·BNB','Frank·BTC'] },
+        'T3':  { x: 870, y: 185, members: ['Eve·XRP','Eve·USDT','Charlie·XRP','Charlie·USDT'] },
+        'T2':  { x: 245, y: 490, members: ['Charlie·BTC','Charlie·ETH','Dave·BTC','Dave·ETH'] },
+        'T5':  { x: 435, y: 490, members: ['Frank·ETH','Frank·XRP','Dave·ETH','Dave·XRP'] },
+        'T7':  { x: 810, y: 490, members: ['Dave·XRP','Dave·USDT','Alice·XRP','Alice·USDT'] }
+      };
+
+      // Draw edges first (so they go under nodes)
+      for (const [tid, t] of Object.entries(trades)) {
+        for (const memKey of t.members) {
+          const n = nodes[memKey];
+          if (!n) continue;
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('class', 'edge');
+          line.setAttribute('x1', t.x); line.setAttribute('y1', t.y);
+          line.setAttribute('x2', n.x); line.setAttribute('y2', n.y);
+          svg.appendChild(line);
+        }
+      }
+
+      // Draw member·asset nodes
+      for (const [key, n] of Object.entries(nodes)) {
+        const [mem, asset] = key.split('·');
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('transform', `translate(${n.x},${n.y})`);
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('class', 'node-mem');
+        rect.setAttribute('x', -52); rect.setAttribute('y', -22);
+        rect.setAttribute('width', 104); rect.setAttribute('height', 44);
+        rect.setAttribute('rx', 8);
+        g.appendChild(rect);
+        const t1 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t1.setAttribute('class', 'node-mem-label');
+        t1.setAttribute('y', -3);
+        t1.textContent = mem;
+        g.appendChild(t1);
+        const t2 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t2.setAttribute('class', 'node-mem-asset');
+        t2.setAttribute('y', 12);
+        t2.textContent = asset;
+        g.appendChild(t2);
+        svg.appendChild(g);
+      }
+
+      // Draw trade junction nodes
+      for (const [tid, t] of Object.entries(trades)) {
+        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('class', 'node-trade');
+        c.setAttribute('cx', t.x); c.setAttribute('cy', t.y); c.setAttribute('r', 18);
+        svg.appendChild(c);
+        const tx = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        tx.setAttribute('class', 'node-trade-label');
+        tx.setAttribute('x', t.x); tx.setAttribute('y', t.y);
+        tx.textContent = tid;
+        svg.appendChild(tx);
+      }
+
+      const wrap = el('div', { class: 'batch-svg-wrap' });
+      wrap.appendChild(svg);
+      v.appendChild(wrap);
+
+      const insight = el('div', { class: 'insight', style: 'margin-top:16px' });
+      insight.innerHTML = '<strong>No overlap:</strong> Dave appears in all three batches (Dave·ADA, Dave·BNB in #1; Dave·BTC, Dave·ETH, Dave·XRP, Dave·USDT in #3; no Dave in #2). But no <em>member·asset</em> key is shared across batches — that\'s why they\'re independent.';
+      v.appendChild(insight);
+
+      return v;
+    },
+    info: {
+      tag: 'STEP 6 · Batch splitting',
+      what: 'Trades are grouped into connected components using union-find over (member, asset) keys. Each component becomes one settlement batch.',
+      why: 'Independent batches can settle in parallel: a hold or failure in Batch 1 doesn\'t freeze Batch 2 or 3. The 22 instructions move as <strong>three independent transfers</strong>, not one giant atomic operation.',
+      detail: '<p><strong>Edges in the graph</strong> are trades; <strong>nodes</strong> are (member · asset) keys. Each subgraph is one maximal connected component.</p>'
+    }
+  },
+
+  // ----- 12: SUMMARY -----
+  {
+    name: 'Done',
+    render() {
+      const v = el('div', { class: 'hero' });
+      v.appendChild(el('div', { class: 'hero-icon' }, '✓'));
+      v.appendChild(el('h1', {}, 'Settlement complete'));
+      v.appendChild(el('p', {}, '10 trades reduced to 22 instructions across 3 independent batches — 3 trades rolled forward to the next window.'));
+
+      const stats = el('div', { class: 'stats', style: 'margin-top: 30px; min-width: 600px' });
+      [
+        { val: '10', lbl: 'Trades', cls: 'total' },
+        { val: '2', lbl: 'Full', cls: 'full' },
+        { val: '5', lbl: 'Partial', cls: 'partial' },
+        { val: '3', lbl: 'Deferred', cls: 'deferred' }
+      ].forEach(s => {
+        const c = el('div', { class: 'stat-card ' + s.cls });
+        c.appendChild(el('div', { class: 'val' }, s.val));
+        c.appendChild(el('div', { class: 'lbl' }, s.lbl));
+        stats.appendChild(c);
+      });
+      v.appendChild(stats);
+
+      const tip = el('div', { class: 'tip' });
+      tip.innerHTML = 'Outputs land at <span class="kbd">output/small-sample/*.csv</span> · validator confirms net flows match the instructions';
+      v.appendChild(tip);
+      return v;
+    },
+    info: {
+      tag: 'SUMMARY',
+      what: 'You\'ve walked the engine\'s six steps end-to-end on the small-sample dataset.',
+      why: 'The same algorithm scales unchanged to thousands of trades and dozens of assets. Precision and dust rules ensure no settlement leg is ever sub-dust; LIFO + strict FIFO give deterministic, fair settlement.',
+      detail: '<p>Press <span class="kbd">←</span> to walk through again, or open the source files at <code>data/small-sample/</code> and <code>output/small-sample/</code> to inspect the raw CSVs.</p>'
+    }
+  }
+];
+
+// ============ NAV / STATE ============
+let currentStep = 0;
+let lastStep = -1;
+
+function renderApp() {
+  const step = STEPS[currentStep];
+  $('stepNumber').textContent = currentStep + 1;
+  $('stepTotal').textContent = STEPS.length;
+  $('stepPillName').textContent = step.name;
+
+  // Render viz with fade
+  const viz = $('viz');
+  const fade = lastStep !== currentStep;
+  if (fade) {
+    viz.style.opacity = '0';
+    setTimeout(() => {
+      viz.innerHTML = '';
+      viz.appendChild(step.render());
+      viz.style.opacity = '1';
+    }, 150);
+  } else {
+    viz.innerHTML = '';
+    viz.appendChild(step.render());
+  }
+
+  // Render info pane
+  const info = $('info');
+  info.innerHTML = '';
+  const card = el('div', { class: 'info-card' });
+  card.appendChild(el('div', { class: 'step-tag' }, step.info.tag));
+  card.appendChild(el('h2', {}, step.name));
+  const what = el('div', { class: 'info-block what' });
+  what.appendChild(el('div', { class: 'label' }, ['◆ ', 'What changed']));
+  const whatP = el('p', { html: step.info.what });
+  what.appendChild(whatP);
+  card.appendChild(what);
+  const why = el('div', { class: 'info-block why' });
+  why.appendChild(el('div', { class: 'label' }, ['● ', 'Why']));
+  const whyP = el('p', { html: step.info.why });
+  why.appendChild(whyP);
+  card.appendChild(why);
+  if (step.info.detail) {
+    const det = el('div', { class: 'info-block detail' });
+    det.appendChild(el('div', { class: 'label' }, ['▸ ', 'Detail']));
+    const detEl = el('div', { html: step.info.detail });
+    det.appendChild(detEl);
+    card.appendChild(det);
+  }
+  info.appendChild(card);
+
+  // Nav state
+  $('prevBtn').disabled = currentStep === 0;
+  $('nextBtn').disabled = currentStep === STEPS.length - 1;
+  $('nextBtn').textContent = currentStep === STEPS.length - 1 ? 'Done ✓' : 'Next →';
+
+  // Dots
+  const dots = $('dots');
+  dots.innerHTML = '';
+  STEPS.forEach((_, i) => {
+    const d = el('span', { class: 'dot' + (i === currentStep ? ' active' : (i < currentStep ? ' done' : '')) });
+    d.addEventListener('click', () => { currentStep = i; renderApp(); });
+    dots.appendChild(d);
+  });
+
+  lastStep = currentStep;
+}
+
+$('prevBtn').addEventListener('click', () => {
+  if (currentStep > 0) { currentStep--; renderApp(); }
+});
+$('nextBtn').addEventListener('click', () => {
+  if (currentStep < STEPS.length - 1) { currentStep++; renderApp(); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight' || e.key === ' ') {
+    e.preventDefault();
+    if (currentStep < STEPS.length - 1) { currentStep++; renderApp(); }
+  }
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    if (currentStep > 0) { currentStep--; renderApp(); }
+  }
+  if (e.key === 'Home') { currentStep = 0; renderApp(); }
+  if (e.key === 'End') { currentStep = STEPS.length - 1; renderApp(); }
+});
+
+renderApp();
+</script>
+</body>
+</html>
