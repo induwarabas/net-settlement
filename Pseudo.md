@@ -110,7 +110,8 @@ runIteration():
             remaining -= qtyToReverse
             if trade fully consumed on the driving side: Start -= 1
 
-    deferFollowingTradesIfNotFullySettled()   // FIFO unwind (see below)
+    if strictFifo:
+        deferFollowingTradesIfNotFullySettled()   // FIFO unwind (see below)
     return true  // caller will re-run
 ```
 

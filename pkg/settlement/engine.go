@@ -309,7 +309,10 @@ func (m *engine) runIteration() bool {
 			}
 		}
 	}
-	m.deferFollowingTradesIfNotFullySettledx()
+	if m.strictFifo {
+		m.deferFollowingTradesIfNotFullySettledx()
+	}
+
 	return true
 }
 
