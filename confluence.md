@@ -1,122 +1,222 @@
 # Settlement Engine — Complete Reference
 
-This document is the long-form reference for the multilateral settlement
-engine. It walks every step of the algorithm using the `small-sample`
-dataset, explains the reasoning behind each rule, and documents the
-penalty logic. It is intentionally written so that a business reader,
-operator, or new engineer can read it cold and understand what the
-engine does, why, and what the output means.
+The `settlement` package implements a multilateral trade settlement engine.
+Given a set of executed trades, opening ledger balances, and per-asset
+reference data, it produces the minimum set of ledger movements needed to
+honour those trades — classifying each trade as fully settled, partially
+settled, or deferred, and grouping the movements into independent batches
+that can be applied atomically and in parallel.
+
+This document is the long-form reference for that engine. It first
+explains the inputs, outputs, and core rules, and then walks the algorithm
+end-to-end on a worked example.
 
 ---
 
 ## Table of Contents
 
-1.  [What the engine does](#1-what-the-engine-does)
-2.  [The `small-sample` dataset](#2-the-small-sample-dataset)
-3.  [Pipeline at a glance](#3-pipeline-at-a-glance)
-4.  [Step 1 · Net everything](#4-step-1--net-everything)
-5.  [Penalty logic](#5-penalty-logic)
-6.  [Step 2 · Resolve deficits (LIFO unwinding)](#6-step-2--resolve-deficits-lifo-unwinding)
-7.  [Step 3 · Dust threshold rules](#7-step-3--dust-threshold-rules)
-8.  [Step 4 · Strict FIFO ordering](#8-step-4--strict-fifo-ordering)
-9.  [Step 5 · Convergence loop](#9-step-5--convergence-loop)
-10. [Step 6 · Classify each trade](#10-step-6--classify-each-trade)
-11. [Step 7 · Split into independent batches](#11-step-7--split-into-independent-batches)
-12. [Step 8 · Emit settlement instructions](#12-step-8--emit-settlement-instructions)
-13. [Numeric precision](#13-numeric-precision)
-14. [Why this design](#14-why-this-design)
-15. [Glossary](#15-glossary)
+1. [What the engine does](#1-what-the-engine-does)
+2. [Inputs and outputs](#2-inputs-and-outputs)
+3. [Core rules](#3-core-rules)
+4. [The example dataset](#4-the-example-dataset)
+5. [Trade blotter and trade flow](#5-trade-blotter-and-trade-flow)
+6. [Anatomy of a trade](#6-anatomy-of-a-trade)
+7. [Step 1 · Net everything](#7-step-1--net-everything)
+8. [Step 2 · Resolve deficits (LIFO unwinding)](#8-step-2--resolve-deficits-lifo-unwinding)
+9. [Step 3 · Dust threshold rules](#9-step-3--dust-threshold-rules)
+10. [Step 4 · Strict FIFO ordering](#10-step-4--strict-fifo-ordering)
+11. [Step 5 · Cascade and convergence](#11-step-5--cascade-and-convergence)
+12. [Step 6 · Classify each trade](#12-step-6--classify-each-trade)
+13. [Step 7 · Split into independent batches](#13-step-7--split-into-independent-batches)
+14. [Step 8 · Emit settlement instructions](#14-step-8--emit-settlement-instructions)
+15. [Penalty logic](#15-penalty-logic)
+16. [Numeric precision](#16-numeric-precision)
+17. [Why this design](#17-why-this-design)
+18. [Glossary](#18-glossary)
 
 ---
 
 ## 1. What the Engine Does
 
-At the end of every settlement window the engine is given three inputs:
+At the end of every settlement window the engine takes a set of executed
+trades and decides — given the members' opening balances and per-asset
+constraints — what the minimum set of ledger movements is that honours
+those trades. Where members have committed to deliver more than they own
+(and won't be receiving the difference within the window), the engine
+unwinds enough of their latest trades to make the books balance,
+classifies every trade as `FULL`, `PARTIAL`, or `DEFERRED`, groups the
+remaining movements into independent batches that can be settled in
+parallel, and reports a penalty for each shortfall that was a true
+commitment rather than engine-induced fallout.
 
-| Input | What it is |
-|-------|-----------|
-| **Trades** (`trades.csv`) | Every executed trade in the window. Each trade has two sides — a buyer and a seller — and one trading pair (e.g. `BTC-ETH`). |
-| **Ledger** (`ledger.csv`) | Each member's opening balance for every asset. |
-| **Assets** (`assets.csv`) | Per-asset metadata: number of decimal places (precision) and a dust threshold below which an amount is uneconomical to move. |
+The engine is multilateral: every trade depends on every other through
+the shared ledger. A member may be short on one trade but receive that
+same asset on another, so the algorithm netts all trade flows first and
+then only acts on the true shortfalls. The convergence loop is the heart
+of the engine — reversing one trade can make another cell negative, and
+the engine alternates resolution and FIFO knock-on until no cell on the
+netting matrix is negative.
 
-From these it produces:
+---
 
-| Output | What it is |
-|--------|-----------|
-| **Trade settlements** (`trade-settlements.csv`) | Each trade classified as `FULL`, `PARTIAL`, or `DEFERRED`, with the settled and deferred portions. |
-| **Settlement instructions** (`settlement-instructions.csv`) | The minimum set of `IN` / `OUT` ledger movements needed to make everyone's closing balance match. |
-| **Independent batches** | The instructions are grouped into batches that share no `(member, asset)` key — so they can be executed atomically in parallel. |
-| **Penalty data** | Per-member penalty information for the **initial deficit set only** — see [§5](#5-penalty-logic). |
+## 2. Inputs and Outputs
+
+The package entry point is:
+
+```go
+func GenerateInstructions(
+    trades []Trade,
+    ledger []LedgerEntry,
+    assets []Asset,
+    strictFifo bool,
+) Results
+```
+
+### 2.1 Inputs
+
+The engine consumes three read-only interfaces, so the caller can supply
+any concrete type.
+
+#### `Trade`
+
+```go
+type Trade interface {
+    TradeID() string
+    ExecTime() int64        // nanoseconds since Unix epoch
+    Buyer() string
+    Seller() string
+    BaseAsset() string
+    QuoteAsset() string
+    Quantity() decimal.Decimal   // base quantity
+    Price() decimal.Decimal      // quote per unit base
+}
+```
+
+Each trade has two sides — a buyer and a seller — and a trading pair
+(e.g. `BTC-ETH`, where BTC is base and ETH is quote). The buyer pays the
+notional (`Quantity × Price` in quote currency) and receives the
+quantity in the base currency; the seller does the opposite.
+
+`ExecTime` drives ordering: LIFO unwinding picks the **newest** trade
+first, and strict FIFO settlement honours the **earliest** commitments
+first. When two trades share an `ExecTime`, original input order breaks
+the tie.
+
+#### `LedgerEntry`
+
+```go
+type LedgerEntry interface {
+    Member() string
+    Asset()  string
+    Balance() decimal.Decimal
+}
+```
+
+The opening balance for one `(member, asset)` cell. Members without an
+entry for a given asset are treated as holding zero of it.
+
+#### `Asset`
+
+```go
+type Asset interface {
+    Symbol() string
+    DustThreshold() decimal.Decimal
+    Precision() int
+}
+```
+
+- **Precision** is the maximum number of decimals an amount of this
+  asset can carry. Inputs are rounded *down* to this precision;
+  reversals are rounded *up* (so a reversal never under-undoes).
+- **DustThreshold** is the smallest amount worth moving. Anything in
+  `(0, DustThreshold)` is sub-dust and must not appear on a settlement
+  leg.
+
+#### The `strictFifo` flag
+
+When `true`, an unsettled trade blocks all later trades for the same
+`(member, asset)` liability position from settling until the earlier one
+clears. When `false`, FIFO knock-on is disabled and a later trade may
+settle in full even if an earlier one is partial.
+
+### 2.2 Outputs
+
+```go
+type Results struct {
+    Batches   []*Result
+    Deferred  []Trade
+    Penalties []*Penalty
+}
+
+type Result struct {
+    Instructions []*Instruction
+    Trades       []*TradeResult
+    Penalties    []*Penalty
+}
+
+type TradeResult struct {
+    Trade                 Trade
+    Status                TradeResultStatus  // FULL / PARTIAL / DEFERRED
+    SettledQuantity       decimal.Decimal
+    SettledQuoteQuantity  decimal.Decimal
+    DeferredQuantity      decimal.Decimal
+    DeferredQuoteQuantity decimal.Decimal
+}
+
+type Instruction struct {
+    Member         string
+    Asset          string
+    OpeningBalance decimal.Decimal
+    NetAmount      decimal.Decimal
+    ClosingBalance decimal.Decimal
+    Direction      InstructionDirection  // IN / OUT
+}
+
+type Penalty struct {
+    Member string
+    Asset  string
+    Amount decimal.Decimal
+}
+```
+
+- **`Batches`** — each batch is a maximal group of trades and
+  instructions whose `(member, asset)` keys are connected. Two batches
+  share no `(member, asset)` key, so they can be executed atomically and
+  in parallel.
+- **`Deferred`** — trades that produced no settlement movement this
+  window. They roll forward unchanged to the next window's input.
+- **`Penalties`** — per-member, per-asset penalty data covering the
+  shortfalls present after the first netting pass (the *initial deficit
+  set*). See [§15](#15-penalty-logic).
+- **`Instruction`** — one ledger movement per `(member, asset)` cell
+  whose closing balance differs from its opening balance. `IN`
+  increases the member's holding; `OUT` decreases it.
+
+For every trade, `SettledQuantity + DeferredQuantity` equals the
+original `Quantity`, and similarly for the quote side. Settlement moves
+value, it never creates or destroys it.
+
+---
+
+## 3. Core Rules
 
 The engine honours four rules at every step:
 
-1.  **LIFO unwinding** — when a member is short of an asset, reverse the
-    *newest* trade for that liability position first.
-2.  **Strict FIFO settlement** — once an earlier trade for a
-    `(member, asset)` position is not honoured in full, every later trade
-    for that same position must also be deferred. Commitments can't
-    queue-jump.
-3.  **Dust safety** — no settlement leg ever emits a sub-dust amount.
-    Either both sides clear dust, or the leg goes to zero.
-4.  **Penalty fairness** — only the initial deficit set (the deficits
-    present *after the first netting pass*) generates penalty. Anything
-    new that appears later as cascade fallout is not penalized.
+1. **LIFO unwinding** — when a member is short of an asset, reverse the
+   *newest* trade for that liability position first. Reversing the
+   newest trade preserves the fairness of earlier trades — they keep
+   their fills.
+2. **Strict FIFO settlement** — once an earlier trade for a
+   `(member, asset)` position is not honoured in full, every later
+   trade for that same position must also be deferred. Commitments
+   can't queue-jump. (Enforced only when `strictFifo` is true.)
+3. **Dust safety** — no settlement leg ever emits a sub-dust amount.
+   Either both sides clear dust, or the leg goes to zero.
+4. **Penalty fairness** — only the initial deficit set (the deficits
+   present *after the first netting pass*) generates penalty. Anything
+   new that appears later as cascade fallout is not penalized.
 
----
-
-## 2. The `small-sample` Dataset
-
-### 2.1 Members and opening balances (`ledger.csv`)
-
-| Member  | Tier | BTC | ETH | XRP | ADA | BNB | USDT |
-|---------|------|----:|----:|----:|----:|----:|-----:|
-| Alice   | T1   |   8 |  50 |  40 |  20 | 200 |  100 |
-| Bob     | T1   |   0 |  55 |   – |  50 |   – |    0 |
-| Charlie | T1   |   5 |  25 |  20 |   – |   – |  200 |
-| Dave    | T2   |   2 |   – |  12 |  10 |  50 |  200 |
-| Eve     | T2   |  15 |   5 |  20 |   8 | 200 |  100 |
-| Frank   | T2   |  15 |   1 |  50 |   0 | 150 |    0 |
-
-A dash means the member holds none of that asset.
-
-### 2.2 Trades (`trades.csv`) — blotter view
-
-| #  | Time         | Pair      | Quantity | Price       | Notional | Buyer   | Seller  |
-|----|--------------|-----------|---------:|-------------|---------:|---------|---------|
-| 1  | 08:00:00.060 | BTC-ETH   |  10 BTC  | 5 ETH/BTC   |   50 ETH | Alice   | Bob     |
-| 2  | 08:00:00.258 | BTC-ETH   |   5 BTC  | 5 ETH/BTC   |   25 ETH | Charlie | Dave    |
-| 3  | 08:00:00.901 | XRP-USDT  |  20 XRP  | 10 USDT/XRP |  200 USDT| Eve     | Charlie |
-| 4  | 08:00:00.911 | ADA-BNB   |  10 ADA  | 5 BNB/ADA   |   50 BNB | Dave    | Eve     |
-| 5  | 08:00:00.931 | ETH-XRP   |  25 ETH  | 2 XRP/ETH   |   50 XRP | Frank   | Dave    |
-| 6  | 08:00:01.065 | ETH-USDT  |  10 ETH  | 20 USDT/ETH |  200 USDT| Bob     | Eve     |
-| 7  | 08:00:01.409 | XRP-USDT  |  10 XRP  | 10 USDT/XRP |  100 USDT| Dave    | Alice   |
-| 8  | 08:00:01.496 | ADA-BNB   |  20 ADA  | 5 BNB/ADA   |  100 BNB | Alice   | Dave    |
-| 9  | 08:00:01.496 | ADA-USDT  |   2 ADA  | 50 USDT/ADA |  100 USDT| Eve     | Bob     |
-| 10 | 08:00:01.726 | BTC-BNB   |  15 BTC  | 10 BNB/BTC  |  150 BNB | Eve     | Frank   |
-
-**The buyer** pays the notional (`quantity × price` in quote currency)
-and receives the quantity in the base currency. **The seller** does the
-opposite. Order matters: time-priority drives both LIFO unwinding (newest
-first) and strict FIFO settlement (earliest commitment first).
-
-### 2.3 Asset rules (`assets.csv`)
-
-| Asset | Precision (decimals) | Dust threshold |
-|-------|---------------------:|---------------:|
-| BTC   |                    8 |     0.00000294 |
-| ETH   |                   18 |          1e-16 |
-| XRP   |                    6 |         0.0001 |
-| ADA   |                    6 |              1 |
-| BNB   |                   18 |          1e-16 |
-| USDT  |                    6 |           0.01 |
-
-**Precision** is the maximum number of decimals an amount can carry.
-**Dust threshold** is the smallest amount worth moving. Anything in
-`(0, dust)` is sub-dust and must not appear on a settlement leg.
-
----
-
-## 3. Pipeline at a Glance
+### 3.1 Pipeline at a glance
 
 ```mermaid
 flowchart TD
@@ -133,25 +233,95 @@ flowchart TD
     F -- No --> J[Step 6: Classify each trade<br/>FULL / PARTIAL / DEFERRED]
     J --> K[Step 7: Union-find on<br/>member+asset → batches]
     K --> L[Step 8: Emit IN/OUT instructions]
-    L --> M[Write CSV output<br/>+ deferred trades for next window]
 ```
 
 The loop between netting (E) and resolution (G–I) is the heart of the
-engine. On `small-sample` it converges in **5 iterations**.
-
-The branch from E to P shows where the **penalty set** is captured —
-it's frozen at the *first* netting pass and never changes afterwards,
-even though the netting matrix is recomputed many times during
-convergence.
+engine. The branch from E to P shows where the penalty set is captured —
+it is frozen at the *first* netting pass and never changes afterwards.
 
 ---
 
-## 4. Step 1 — Net Everything
+## 4. The Example Dataset
 
-### 4.1 What netting means
+The walkthrough that follows uses a worked example: six members trade
+six assets across ten trades. The example produces 22 instructions in 3
+independent batches, with 3 trades pushed to the next window, after the
+engine converges in 5 iterations.
 
-The engine pretends, for a moment, that every trade settles in full. For
-each trade it applies four flows to the `member × asset` matrix:
+### 4.1 Members and opening balances
+
+| Member  | Tier | BTC | ETH | XRP | ADA | BNB | USDT |
+|---------|------|----:|----:|----:|----:|----:|-----:|
+| Alice   | T1   |   8 |  50 |  40 |  20 | 200 |  100 |
+| Bob     | T1   |   0 |  55 |   – |  50 |   – |    0 |
+| Charlie | T1   |   5 |  25 |  20 |   – |   – |  200 |
+| Dave    | T2   |   2 |   – |  12 |  10 |  50 |  200 |
+| Eve     | T2   |  15 |   5 |  20 |   8 | 200 |  100 |
+| Frank   | T2   |  15 |   1 |  50 |   0 | 150 |    0 |
+
+A dash means the member holds none of that asset. These opening balances
+are the constraint: a member can only deliver what they own (plus what
+they're receiving in the same window). Tiers (T1 / T2) classify member
+type but don't change settlement logic.
+
+### 4.2 Asset rules
+
+| Asset | Precision (decimals) | Dust threshold |
+|-------|---------------------:|---------------:|
+| BTC   |                    8 |     0.00000294 |
+| ETH   |                   18 |          1e-16 |
+| XRP   |                    6 |         0.0001 |
+| ADA   |                    6 |              1 |
+| BNB   |                   18 |          1e-16 |
+| USDT  |                    6 |           0.01 |
+
+---
+
+## 5. Trade Blotter and Trade Flow
+
+### 5.1 Blotter view
+
+| #  | Time         | Instrument | Quantity | Price       | Notional  | Buyer   | Seller  |
+|----|--------------|------------|---------:|-------------|----------:|---------|---------|
+| 1  | 00:00.060    | BTC-ETH    |  10 BTC  | 5 ETH/BTC   |    50 ETH | Alice   | Bob     |
+| 2  | 00:00.258    | BTC-ETH    |   5 BTC  | 5 ETH/BTC   |    25 ETH | Charlie | Dave    |
+| 3  | 00:00.901    | XRP-USDT   |  20 XRP  | 10 USDT/XRP |  200 USDT | Eve     | Charlie |
+| 4  | 00:00.911    | ADA-BNB    |  10 ADA  | 5 BNB/ADA   |    50 BNB | Dave    | Eve     |
+| 5  | 00:00.931    | ETH-XRP    |  25 ETH  | 2 XRP/ETH   |    50 XRP | Frank   | Dave    |
+| 6  | 00:01.065    | ETH-USDT   |  10 ETH  | 20 USDT/ETH |  200 USDT | Bob     | Eve     |
+| 7  | 00:01.409    | XRP-USDT   |  10 XRP  | 10 USDT/XRP |  100 USDT | Dave    | Alice   |
+| 8  | 00:01.496    | ADA-BNB    |  20 ADA  | 5 BNB/ADA   |   100 BNB | Alice   | Dave    |
+| 9  | 00:01.496    | ADA-USDT   |   2 ADA  | 50 USDT/ADA |  100 USDT | Eve     | Bob     |
+| 10 | 00:01.726    | BTC-BNB    |  15 BTC  | 10 BNB/BTC  |   150 BNB | Eve     | Frank   |
+
+Price is quote per unit base; notional is the total quote value.
+
+### 5.2 Why execution time matters
+
+The same trades viewed as a flow list make overlapping member exposures
+obvious. Execution time matters twice:
+
+- **LIFO unwinding** reverses the newest trade first when a member is
+  short.
+- **Strict FIFO** defers any later trade once an earlier one is partial
+  on the same `(member, asset)` position.
+
+Notice trades 8 and 9 share a timestamp — when ties happen, original
+input order breaks the tie.
+
+---
+
+## 6. Anatomy of a Trade
+
+For every trade, the engine applies exactly four flows to the
+`member × asset` matrix:
+
+| Side   | Base asset | Quote asset |
+|--------|-----------|-------------|
+| Buyer  | gain (↑)  | loss (↓)    |
+| Seller | loss (↓)  | gain (↑)    |
+
+For trade #1 — Alice buys 10 BTC from Bob @ 5 ETH each:
 
 ```mermaid
 flowchart LR
@@ -160,23 +330,40 @@ flowchart LR
         Alice((Alice))
         Bob((Bob))
         Alice -- "+10 BTC (gain)" --> ABT[Alice·BTC]
-        Alice -- "−50 ETH (loss)" --> AET[Alice·ETH]
-        Bob   -- "−10 BTC (loss)" --> BBT[Bob·BTC]
-        Bob   -- "+50 ETH (gain)" --> BET[Bob·ETH]
+        Alice -- "−50 ETH (pay)"  --> AET[Alice·ETH]
+        Bob   -- "−10 BTC (deliver)" --> BBT[Bob·BTC]
+        Bob   -- "+50 ETH (receive)" --> BET[Bob·ETH]
     end
 ```
 
-| Side   | Base asset | Quote asset |
-|--------|-----------|-------------|
-| Buyer  | gain (↑)  | loss (↓)    |
-| Seller | loss (↓)  | gain (↑)    |
+Settlement creates no value — it just moves it. The four flows always
+sum to zero per asset, so the system's total holdings of each asset are
+unchanged by any trade.
 
-The four flows always sum to zero per asset — settlement *moves* value,
-it doesn't create or destroy it.
+Bob does not actually own 10 BTC (opening: 0). The engine does not care
+yet — it just records intent. Reality is checked in the next step.
 
-### 4.2 The `small-sample` netting result
+---
 
-Summing all flows on top of the opening ledger:
+## 7. Step 1 — Net Everything
+
+### 7.1 What netting means
+
+The engine pretends, for a moment, that every trade settles in full. It
+applies the four flows of every trade to the `member × asset` matrix
+and inspects the result.
+
+A member may be short on one trade but *receive* the same asset on
+another trade in the same window. Without netting, the engine would
+reverse trades unnecessarily. With netting, only **true** uncovered
+positions get resolved.
+
+For example, Eve's USDT row in the netting matrix is 0:
+`100 (opening) − 200 (T3) + 200 (T6) − 100 (T9) = 0`. If we had looked
+at each trade individually, T3 alone would have looked like a 100-USDT
+shortfall. Netting reveals that the inflows cover it.
+
+### 7.2 The netting result
 
 | Member  | BTC      | ETH     | XRP | ADA | BNB | USDT       |
 |---------|---------:|--------:|----:|----:|----:|-----------:|
@@ -187,96 +374,26 @@ Summing all flows on top of the opening ledger:
 | Eve     |       30 |  **−5** ⚠ |  40 |   0 | 100 |          0 |
 | Frank   |        0 |      26 |   0 |   0 | 300 |          0 |
 
-The bolded cells are **deficits** — the member has agreed to deliver
-more than they have (after netting). There are four:
+The bolded cells are **deficits** — members who have agreed to deliver
+more than they have. There are four:
 
 | # | Member · Asset | Deficit  | Caused by                                  |
 |---|----------------|---------:|--------------------------------------------|
-| 1 | `Bob · BTC`    | −10 BTC  | T1 sells 10 BTC; Bob owns 0.                |
-| 2 | `Bob · USDT`   | −100 USDT| T6 pays 200; T9 receives 100; opening 0.    |
-| 3 | `Dave · BTC`   | −3 BTC   | T2 sells 5 BTC; Dave owns 2.                |
-| 4 | `Eve · ETH`    | −5 ETH   | T6 sells 10 ETH; Eve owns 5.                |
+| 1 | `Bob · BTC`    | −10 BTC  | T1 sells 10 BTC; Bob owns 0                |
+| 2 | `Bob · USDT`   | −100 USDT| T6 pays 200; T9 receives 100; opening 0    |
+| 3 | `Dave · BTC`   | −3 BTC   | T2 sells 5 BTC; Dave owns 2                |
+| 4 | `Eve · ETH`    | −5 ETH   | T6 sells 10 ETH; Eve owns 5                |
 
-### 4.3 Why net first
-
-A member may be short on one trade but *receive* the same asset on
-another trade in the same window. Without netting, the engine would
-reverse trades unnecessarily. With netting, only **true** uncovered
-positions get resolved.
-
-For example, Eve's USDT row in the netting matrix is 0:
-`100 (opening) − 200 (T3) + 200 (T6) − 100 (T9) = 0`. If we'd looked at
-each trade individually, T3 alone would have looked like a 100-USDT
-shortfall. Netting reveals that the inflows cover it.
+This is the **initial deficit set**. It is frozen at this moment and
+becomes the basis for penalty calculation — see [§15](#15-penalty-logic).
+Anything that becomes negative later is treated as cascade fallout and
+is not penalized.
 
 ---
 
-## 5. Penalty Logic
+## 8. Step 2 — Resolve Deficits (LIFO Unwinding)
 
-This is one of the most important rules, and the most counter-intuitive
-to read out of the code, so it gets its own section.
-
-### 5.1 The rule
-
-> **Only the initial deficit set is penalized.**
-> The "initial deficit set" is the set of `(member, asset)` cells whose
-> net position is negative after the **first** netting pass (i.e.
-> immediately after [§4](#4-step-1--net-everything), before any
-> reversal happens). Anything that becomes negative later — as a
-> consequence of the engine's own reversal cascade — is treated as
-> cascade fallout and is **not** penalized.
-
-### 5.2 Why
-
-The engine resolves deficits by reversing earlier trades. Reversing a
-trade un-applies its four flows — which can push *other* cells negative.
-Those new negatives weren't caused by the member's behaviour; they were
-caused by the engine's resolution mechanism. Charging a penalty for them
-would double-bill the same underlying shortfall.
-
-```mermaid
-flowchart TD
-    A[Initial netting matrix] --> B{Any cell negative?}
-    B -- Yes --> C[Record cell in INITIAL_DEFICITS<br/>frozen — never updated]
-    B --> D[Resolve via LIFO reversal]
-    D --> E{Reversal pushed<br/>other cells negative?}
-    E -- Yes --> F[These are CASCADE FALLOUT<br/>NOT added to INITIAL_DEFICITS]
-    E -- No --> G[Continue]
-    F --> D
-    C --> H[Compute penalty against<br/>INITIAL_DEFICITS only]
-    G --> H
-```
-
-### 5.3 In `small-sample`
-
-| Cell           | Status                        | Penalized?            |
-|----------------|-------------------------------|-----------------------|
-| `Bob · BTC`    | Initial deficit (−10)         | ✅ Yes                 |
-| `Bob · USDT`   | Initial deficit (−100)        | ✅ Yes                 |
-| `Dave · BTC`   | Initial deficit (−3)          | ✅ Yes                 |
-| `Eve · ETH`    | Initial deficit (−5)          | ✅ Yes                 |
-| `Dave · ETH`   | Introduced when T2 partial reversed pulled 15 ETH off Dave's incoming flow | ❌ No (cascade fallout) |
-| `Charlie · ETH`| Introduced when T2 partial reversed | ❌ No (cascade fallout) |
-| any other negative that appears mid-convergence | – | ❌ No |
-
-### 5.4 Reading example
-
-When Dave's `−3 BTC` deficit is resolved, the engine reverses 3 BTC /
-15 ETH of T2. That reversal takes 15 ETH off Charlie's incoming flow
-*and* 15 ETH off Dave's incoming flow — Dave's ETH cell drops to −15.
-Even though that's a new red cell on the matrix, **the penalty engine
-does not see it**. Dave is still only penalized for the original
-`Dave · BTC = −3` deficit.
-
-> *"Initial deficits are commitments. Cascade fallout is plumbing.
-> Members pay for commitments they couldn't meet, not for the engine's
-> way of cleaning up."*
-
----
-
-## 6. Step 2 — Resolve Deficits (LIFO Unwinding)
-
-### 6.1 The newest-first rule
+### 8.1 The newest-first rule
 
 For every deficit, the engine reverses the **most recent** trade that
 put the member on the owing side of that asset, walking backward until
@@ -304,20 +421,20 @@ flowchart TD
 ones. Reversing the newest trade preserves the fairness of earlier
 trades — they keep their fills, only the latest gets walked back.
 
-### 6.2 Reversals preserve the trade ratio
+### 8.2 Reversals preserve the trade ratio
 
-If we reverse `q` units of the base side, the corresponding quote
-reversal is:
+A reversal must preserve the trade's agreed price. If we reverse `q`
+units of the base side, the corresponding quote reversal is:
 
 ```
 quoteReversed = q × (trade.quoteQty / trade.baseQty)
 ```
 
 This keeps the partially-settled remainder at exactly the original
-agreed price. The remaining settled portion is a smaller version of the
-original trade, not a re-priced one.
+price. The settled portion is a smaller version of the original trade,
+not a re-priced one.
 
-### 6.3 Worked example A — Bob's BTC (full reversal)
+### 8.3 Worked example A — Bob's BTC (full reversal)
 
 Bob is short 10 BTC. His only BTC liability is T1 (he sells 10 BTC).
 The deficit equals the full base side, so T1 is reversed in full:
@@ -325,55 +442,67 @@ The deficit equals the full base side, so T1 is reversed in full:
 | | Base | Quote |
 |--|------|-------|
 | Original T1 | 10 BTC | 50 ETH |
-| Reverse fully | −10 BTC | −50 ETH |
-| **Remains settled** | **0 BTC** | **0 ETH** |
+| Deficit equals full base side | = 10 BTC | |
+| Reverse fully → `DEFERRED` | −10 BTC | −50 ETH |
+| **Settles this window** | **0 BTC** | **0 ETH** |
 
-**Result:** T1 → `DEFERRED`. The full 10 BTC ↔ 50 ETH rolls to the
-next window. Bob's BTC deficit cleared. Alice's incoming BTC drops by
-10, her outgoing ETH returns by 50.
+**Affected cells:** Alice·BTC drops by 10, Alice·ETH gains 50 back,
+Bob·BTC clears to 0, Bob·ETH drops by 50. Bob's BTC deficit is gone.
 
-### 6.4 Worked example B — Dave's BTC (partial reversal + cascade)
+**Why fully?** Bob's only BTC obligation is T1. Reversing anything less
+wouldn't cover his 10 BTC shortfall.
+
+### 8.4 Worked example B — Dave's BTC (partial reversal + cascade)
 
 Dave is short only 3 of the 5 BTC he agreed to deliver in T2.
 
 | | Base | Quote |
 |--|------|-------|
 | Original T2 | 5 BTC | 25 ETH |
-| Reverse 3 BTC | 3 BTC | 3 × (25 / 5) = 15 ETH |
-| **Remains settled** | **2 BTC** | **10 ETH** |
-| Deferred (rolls forward) | 3 BTC | 15 ETH |
+| Reverse to cover deficit | 3 BTC | ? |
+| Scale by trade ratio · 3 × (25 / 5) | | = 15 ETH |
+| Deferred portion | 3 BTC | 15 ETH |
+| **Settles this window** | **2 BTC** | **10 ETH** |
 
-**Result:** T2 → `PARTIAL`. Dave delivers 2 BTC instead of 5, Charlie
-pays 10 ETH instead of 25.
+T2 → `PARTIAL`. Dave delivers 2 BTC instead of 5, Charlie pays 10 ETH
+instead of 25.
 
-**Cascade:** Reversing 15 ETH of T2's quote side takes 15 ETH off
-*Dave's* incoming flow too (Dave was the seller, receiving ETH). His
-ETH cell, previously 0, becomes −15.
+**Cascade fallout:** Reversing 15 ETH of T2's quote side also pulls
+15 ETH back from Dave's incoming flow (Dave was the seller, receiving
+ETH). His ETH cell, previously 0, becomes −15.
 
-> 🛈 This new `Dave · ETH = −15` is **cascade fallout**, not part of
-> the initial deficit set — it is **not penalized** (see [§5](#5-penalty-logic)).
-> The engine will iterate again to clear it, but Dave is only penalized
-> for his original BTC shortfall.
+> This new `Dave · ETH = −15` is **cascade fallout**, not part of the
+> initial deficit set — it is **not penalized**. The engine will iterate
+> again to clear it.
 
-### 6.5 Other reversals in `small-sample`
+### 8.5 Other reversals in the example
 
 | Initial deficit | Reversed trade | Outcome                                    |
 |-----------------|----------------|--------------------------------------------|
 | `Bob · BTC = −10` | T1 (newest BTC liability) | T1 fully → `DEFERRED`                  |
 | `Dave · BTC = −3` | T2 (newest BTC liability) | T2 partial 3/15 → `PARTIAL`            |
 | `Eve · ETH = −5`  | T6 (newest ETH liability) | T6 fully → `DEFERRED` (dust-driven)    |
-| `Bob · USDT = −100`| T9 (newest USDT liability)| T9 fully → `DEFERRED` (also FIFO-dragged) |
+| `Bob · USDT = −100`| T9 (newest USDT liability)| T9 fully → `DEFERRED` (FIFO-dragged)  |
 
-Each of these triggers further netting changes, which the convergence
-loop sorts out in subsequent iterations (see [§9](#9-step-5--convergence-loop)).
+Each triggers further netting changes, which the convergence loop sorts
+out in subsequent iterations (see [§11](#11-step-5--cascade-and-convergence)).
 
 ---
 
-## 7. Step 3 — Dust Threshold Rules
+## 9. Step 3 — Dust Threshold Rules
 
-### 7.1 The visual model
+Reversals must never leave sub-dust amounts on either side. Moving
+0.001 USDT costs more in fees and operational overhead than the value
+moved — sub-dust legs are pure noise. The engine guarantees that every
+leg it emits is either exactly zero or strictly above its asset's dust
+threshold.
 
-Think of a trade as a horizontal log with **dust zones at each end**:
+### 9.1 The visual model — a trade as a log with dust zones
+
+Each asset has a dust threshold — the smallest amount worth moving. To
+partial-settle, the engine "cuts" the trade into a *settled* portion
+(left) and a *deferred* portion (right). The cut must land in the safe
+middle of *both* assets so both sides clear dust.
 
 ```
                               cut (split position)
@@ -389,60 +518,63 @@ Think of a trade as a horizontal log with **dust zones at each end**:
 ```
 
 - The **width of each bar** is the trade's total quantity.
-- The **left dust zone** is "if settled is smaller than this, settled is sub-dust".
-- The **right dust zone** is "if deferred is smaller than this, deferred is sub-dust".
+- The **left dust zone** is "if settled is smaller than this, settled
+  is sub-dust".
+- The **right dust zone** is "if deferred is smaller than this,
+  deferred is sub-dust".
 - The two assets in a pair have **different dust widths** — USDT
   (dust = 0.01) is much wider than BTC (dust = 0.00000294). The wider
   one is the binding constraint.
 
-The engine wants the cut to land in the **safe zone of both assets at
-the same time** — the intersection of both safe regions.
+The engine wants the cut to land in the intersection of both safe
+regions.
 
-### 7.2 Three scenarios
+### 9.2 Three scenarios
 
 | Scenario | Where the cut wants to land | What the engine does | Outcome |
 |----------|----------------------------|----------------------|---------|
-| **OK · can split** | In the safe zone of both assets. | Accept the partial reversal as-is. | `PARTIAL` |
-| **Settled too small → DEFER** | Inside the **left** dust zone (settled portion would be sub-dust). | The engine *can't* widen — making settled smaller pushes it toward zero. Fully reverse the trade. | `DEFERRED` |
-| **Deferred too small → WIDEN** | Inside the **right** dust zone (deferred portion would be sub-dust). | Drag the cut **leftward** until the deferred side just clears dust. Re-scale the other side to keep the trade ratio. | `PARTIAL` (with the smallest dust-clearing deferral) |
+| **OK · can split** | In the safe zone of both assets | Accept the partial reversal as-is | `PARTIAL` |
+| **Settled too small → DEFER** | Inside the left dust zone (settled portion would be sub-dust) | Cannot widen — making settled smaller pushes it toward zero. Fully reverse the trade | `DEFERRED` |
+| **Deferred too small → WIDEN** | Inside the right dust zone (deferred portion would be sub-dust) | Drag the cut leftward until the deferred side just clears dust; re-scale the other side to keep the trade ratio | `PARTIAL` |
 
-### 7.3 Worked example A — Defer scenario
+### 9.3 Scenario A — Defer (settled side would be too small)
 
 Hypothetical trade: Alice buys 1 BTC from Bob @ 10 USDT. Bob is short
 0.9999 BTC.
 
 | Step | Base | Quote |
 |------|------|-------|
-| Original | 1 BTC | 10 USDT |
-| Reverse to cover deficit | 0.9999 BTC | 9.999 USDT |
+| Original trade | 1 BTC | 10 USDT |
+| Reverse to cover deficit · 0.9999 × (10/1) | 0.9999 BTC | 9.999 USDT |
 | Would-be settled | 0.0001 BTC | 0.001 USDT |
 
 Dust check on the settled side:
 
-| Side | Settled | Dust limit | Verdict |
-|------|--------:|-----------:|---------|
-| BTC  | 0.0001 BTC | 0.00000294 | ✅ above dust |
-| USDT | 0.001 USDT | 0.01       | ❌ sub-dust  |
+| Side | Settled    | Dust limit | Verdict |
+|------|-----------:|-----------:|---------|
+| BTC  | 0.0001 BTC | 0.00000294 | ✓ above dust |
+| USDT | 0.001 USDT | 0.01       | ✗ sub-dust  |
 
 USDT fails. **Engine fully reverses the trade → `DEFERRED`.** Settling
-0.001 USDT crumbs costs more than it moves.
+0.001 USDT crumbs costs more than it moves; the full 1 BTC ↔ 10 USDT
+rolls to the next window.
 
-### 7.4 Worked example B — Widen scenario
+### 9.4 Scenario B — Widen (deferred side would be too small)
 
-Same trade. Bob is short only 0.0001 BTC.
+Same trade, but Bob is short only 0.0001 BTC.
 
 | Step | Base | Quote |
 |------|------|-------|
-| Original | 1 BTC | 10 USDT |
+| Original trade | 1 BTC | 10 USDT |
 | Reverse small slice | 0.0001 BTC | 0.001 USDT |
 | Would-be deferred | 0.0001 BTC | 0.001 USDT |
 
 Dust check on the deferred side:
 
-| Side | Deferred | Dust limit | Verdict |
-|------|---------:|-----------:|---------|
-| BTC  | 0.0001 BTC | 0.00000294 | ✅ above dust |
-| USDT | 0.001 USDT | 0.01       | ❌ sub-dust  |
+| Side | Deferred   | Dust limit | Verdict |
+|------|-----------:|-----------:|---------|
+| BTC  | 0.0001 BTC | 0.00000294 | ✓ above dust |
+| USDT | 0.001 USDT | 0.01       | ✗ sub-dust  |
 
 USDT deferred would be sub-dust. **Engine widens the reversal until
 deferred USDT ≥ 0.01:**
@@ -456,18 +588,15 @@ deferred USDT ≥ 0.01:**
 
 Now both deferred legs clear dust. Trade settles as `PARTIAL`.
 
-### 7.5 Why dust matters
-
-Moving 0.001 USDT costs more in network fees and operational overhead
-than the value moved. Sub-dust legs are pure noise. The engine
-guarantees that every leg it emits is either exactly zero or strictly
-above dust.
+**Invariant:** every settlement leg the engine emits is either exactly
+zero or strictly above its asset's dust threshold. No tiny dribbles
+ever hit the ledger.
 
 ---
 
-## 8. Step 4 — Strict FIFO Ordering
+## 10. Step 4 — Strict FIFO Ordering
 
-### 8.1 The rule
+### 10.1 The rule
 
 > Once an earlier trade for a `(member, asset)` *liability position* is
 > not honoured in full, every later trade for that same position must
@@ -484,9 +613,9 @@ When a trade becomes partial or deferred, **both** keys are added to a
 "deferred set". Any later trade that touches a key in this set gets
 fully reversed.
 
-### 8.2 The chain — side-by-side comparison
+### 10.2 Side-by-side — what FIFO prevents
 
-Using T3 and T9 from `small-sample`, both of which have Eve as a
+Using T3 and T9 from the example, both of which have Eve as a
 USDT-paying buyer:
 
 **Without strict FIFO** (what would go wrong):
@@ -500,7 +629,7 @@ T9   Eve buys 2 ADA from Bob @ 100 USDT           → FULL ✗
                             ↓
    Result: Bob (T9) paid in full, Charlie (T3) only got half.
            A later trade jumped the queue past an earlier one.
-           Markets reject this.
+           Real markets refuse to accept this.
 ```
 
 **With strict FIFO** (what the engine does):
@@ -518,17 +647,21 @@ T9   Eve buys 2 ADA from Bob @ 100 USDT           → DEFERRED ✓
            Earlier commitments honoured before later ones.
 ```
 
-### 8.3 Chain of reasoning
+### 10.3 Chain of reasoning
 
-1. **T3 fails.** Charlie can't deliver all 20 XRP to Eve — only 10 XRP move.
-2. **Therefore Eve doesn't pay all 200 USDT to Charlie** — only the 100 USDT matching the 10 XRP she actually receives.
-3. **Since Eve isn't paying her full USDT obligation in T3**, her USDT-paying commitment is broken for the rest of the window.
-4. **So Eve won't pay USDT for T9 either**, and the engine defers T9 — even though Eve has 100 USDT sitting in her account.
+1. **T3 is going to fail.** Charlie can't deliver all 20 XRP to Eve —
+   only 10 XRP will move.
+2. **Therefore Eve is not going to pay all 200 USDT to Charlie** —
+   only the 100 USDT matching the 10 XRP she actually receives.
+3. **Since Eve isn't paying her full USDT obligation in T3**, her
+   USDT-paying commitment is broken for the rest of the window.
+4. **So Eve will not pay USDT for T9 either**, and the engine defers
+   T9 — even though Eve has 100 USDT sitting in her account.
 
 > Settlement is about **commitments**, not just balances. Once a
 > commitment chain breaks, every link after it has to wait too.
 
-### 8.4 FIFO algorithm (per-iteration)
+### 10.4 FIFO algorithm (per-iteration)
 
 ```mermaid
 flowchart TD
@@ -545,11 +678,12 @@ flowchart TD
 
 ---
 
-## 9. Step 5 — Convergence Loop
+## 11. Step 5 — Cascade and Convergence
 
-After every resolution pass, FIFO knock-on, or cascade-induced new
-deficit, the engine re-runs netting and re-resolves. It iterates until
-no cell is negative.
+Each reversal undoes a portion of trade flows, which can push other
+cells negative. The engine alternates resolution, dust check, and FIFO
+knock-on, re-running netting after every pass. It iterates until no
+cell is negative.
 
 ```mermaid
 flowchart LR
@@ -561,21 +695,25 @@ flowchart LR
     B -- no --> F[converged ✓]
 ```
 
-**On `small-sample`:** the engine converges in **5 iterations**.
+On the example dataset, the engine converges in **5 iterations**:
 
 | Iter | What happens                                                           |
 |-----:|------------------------------------------------------------------------|
 |    1 | Initial 4 deficits identified · frozen as the penalty set              |
-|    2 | LIFO reversals applied (T1 full, T2 partial, T6 partial, T9 full)      |
-|    3 | Cascade: Dave·ETH and Charlie·ETH go negative from T2 reversal         |
-|    4 | More reversals; FIFO drags T3 → T9 via Eve·USDT                        |
-|    5 | All cells non-negative → converged                                     |
+|    2 | LIFO reversals applied (cascade A)                                     |
+|    3 | Cascade B: Dave·ETH and Charlie·ETH go negative from T2 reversal       |
+|    4 | FIFO sweep — T3 partial drags T9 via Eve·USDT                          |
+|    5 | All cells non-negative → converged ✓                                   |
 
-The penalty set, recorded at iteration 1, never changes.
+The penalty set, recorded at iteration 1, never changes. When T6 ends
+up deferred, Bob's `(buyer, USDT)` position is marked partial; later
+trade T9 also has Bob as a USDT-paying counterparty, so it gets fully
+dragged into deferral — even though Bob's USDT balance alone could
+have covered it. Earlier commitments come first.
 
 ---
 
-## 10. Step 6 — Classify Each Trade
+## 12. Step 6 — Classify Each Trade
 
 After convergence, every trade is labelled with one of three statuses:
 
@@ -588,7 +726,13 @@ flowchart TD
     Q2 -- No --> P[PARTIAL<br/>Keep current split]
 ```
 
-**`small-sample` results** (`output/small-sample/trade-settlements.csv`):
+| Status     | Meaning                                                                   |
+|------------|---------------------------------------------------------------------------|
+| `FULL`     | Settled quantity equals original; deferred portion is zero or sub-dust on both sides. |
+| `PARTIAL`  | Settled and deferred portions are both above dust.                        |
+| `DEFERRED` | Nothing settles; or the settled portion would be sub-dust.                |
+
+### 12.1 Final classification for the example
 
 | #  | Buyer / Seller   | Pair      | Status   | Settled            | Deferred           |
 |----|------------------|-----------|----------|--------------------|--------------------|
@@ -605,23 +749,28 @@ flowchart TD
 
 **Totals**: 2 FULL · 5 PARTIAL · 3 DEFERRED.
 
-Deferred portions roll forward to the next settlement window — no value
-is lost, just delayed.
+Deferred portions roll forward to the next settlement window via the
+`Deferred []Trade` field of the `Results` — no value is lost, just
+delayed.
 
 ---
 
-## 11. Step 7 — Split Into Independent Batches
+## 13. Step 7 — Split Into Independent Batches
 
-### 11.1 Why split
+### 13.1 Why split
 
 Two batches are **independent** when they share no `(member, asset)`
-pair. Independent batches can be:
+key. Independent batches can be:
 
 - Executed **in parallel** — no shared resources to lock.
 - Settled **atomically per batch** — if one batch's funds movement
   fails, the others still go through.
 
-### 11.2 How: union-find over `(member, asset)` keys
+A hold or failure in one batch doesn't freeze the others. The
+instructions move as several independent transfers, not one giant
+atomic operation.
+
+### 13.2 How: union-find over `(member, asset)` keys
 
 For each settled trade, the engine unions the four `(member, asset)`
 keys it touches:
@@ -635,7 +784,7 @@ union(buyer · baseAsset,  seller · quoteAsset)
 After all trades are processed, each connected component becomes one
 batch.
 
-### 11.3 The three batches of `small-sample`
+### 13.3 The three batches of the example
 
 ```mermaid
 flowchart LR
@@ -710,24 +859,24 @@ flowchart LR
     end
 ```
 
-Notice: **no `member · asset` node is repeated across batches.**
-Dave appears in all three batches, but `Dave · ADA` only lives in
-Batch 1, `Dave · BTC` only in Batch 3, etc. — they're different keys,
-so the batches don't share state.
+**No overlap:** Dave appears in all three batches (Dave·ADA, Dave·BNB
+in #1; Dave·BTC, Dave·ETH, Dave·XRP, Dave·USDT in #3), but no
+`member · asset` key is repeated across batches — that's why they are
+independent.
 
-### 11.4 Deferred trades (no batch)
+### 13.4 Deferred trades (no batch)
 
 T1, T6, T9 contribute nothing this window. They go straight into the
-next window's input.
+`Deferred` list of the `Results`.
 
 ---
 
-## 12. Step 8 — Emit Settlement Instructions
+## 14. Step 8 — Emit Settlement Instructions
 
 The engine recomputes the netting matrix using the **settled**
 quantities (not the original trade quantities). For every
 `(member, asset)` cell where the closing balance differs from the
-opening balance, it emits one instruction:
+opening balance, it emits one `Instruction`:
 
 | Direction | Meaning                            |
 |-----------|------------------------------------|
@@ -736,12 +885,10 @@ opening balance, it emits one instruction:
 
 Cells that net to zero produce no instruction.
 
-### 12.1 Worked example
+For example, Alice's ADA: opening 20, T8 settles 18 ADA in her favour.
+Closing 38. Instruction: `Alice, ADA, +18 IN`.
 
-Alice's ADA: opening **20**, T8 settled **18** ADA in her favour. Closing
-**38**. Instruction: `Alice, ADA, +18 IN`.
-
-### 12.2 The 22 instructions of `small-sample`
+### 14.1 The 22 instructions of the example
 
 #### Batch 1 — trades 4, 8, 10 (9 instructions)
 
@@ -780,27 +927,88 @@ Alice's ADA: opening **20**, T8 settled **18** ADA in her favour. Closing
 | Charlie | BTC   |       5 |   +2 | IN        |       7 |
 | Charlie | ETH   |      25 |  −10 | OUT       |      15 |
 
-**Total:** 22 instructions — 11 `IN` and 11 `OUT`. They balance, because
-settlement moves value, doesn't create it.
+**Total:** 22 instructions — 11 `IN` and 11 `OUT`. They balance,
+because settlement moves value, doesn't create it.
 
 ---
 
-## 13. Numeric Precision
+## 15. Penalty Logic
+
+### 15.1 The rule
+
+> **Only the initial deficit set is penalized.**
+> The "initial deficit set" is the set of `(member, asset)` cells whose
+> net position is negative after the **first** netting pass — i.e.
+> immediately after [§7](#7-step-1--net-everything), before any
+> reversal happens. Anything that becomes negative later — as a
+> consequence of the engine's own reversal cascade — is cascade fallout
+> and is **not** penalized.
+
+### 15.2 Why
+
+The engine resolves deficits by reversing earlier trades. Reversing a
+trade un-applies its four flows — which can push *other* cells
+negative. Those new negatives weren't caused by the member's behaviour;
+they were caused by the engine's resolution mechanism. Charging a
+penalty for them would double-bill the same underlying shortfall.
+
+```mermaid
+flowchart TD
+    A[Initial netting matrix] --> B{Any cell negative?}
+    B -- Yes --> C[Record cell in INITIAL_DEFICITS<br/>frozen — never updated]
+    B --> D[Resolve via LIFO reversal]
+    D --> E{Reversal pushed<br/>other cells negative?}
+    E -- Yes --> F[These are CASCADE FALLOUT<br/>NOT added to INITIAL_DEFICITS]
+    E -- No --> G[Continue]
+    F --> D
+    C --> H[Compute penalty against<br/>INITIAL_DEFICITS only]
+    G --> H
+```
+
+### 15.3 In the example
+
+| Cell           | Status                        | Penalized?            |
+|----------------|-------------------------------|-----------------------|
+| `Bob · BTC`    | Initial deficit (−10)         | ✓ Yes                 |
+| `Bob · USDT`   | Initial deficit (−100)        | ✓ Yes                 |
+| `Dave · BTC`   | Initial deficit (−3)          | ✓ Yes                 |
+| `Eve · ETH`    | Initial deficit (−5)          | ✓ Yes                 |
+| `Dave · ETH`   | Introduced when T2 partial reversal pulled 15 ETH off Dave's incoming flow | ✗ No (cascade fallout) |
+| `Charlie · ETH`| Introduced when T2 partial reversal | ✗ No (cascade fallout) |
+| any other negative that appears mid-convergence | – | ✗ No |
+
+### 15.4 Reading example
+
+When Dave's `−3 BTC` deficit is resolved, the engine reverses 3 BTC /
+15 ETH of T2. That reversal takes 15 ETH off Charlie's incoming flow
+*and* 15 ETH off Dave's incoming flow — Dave's ETH cell drops to −15.
+Even though that's a new red cell on the matrix, the penalty logic
+does not see it. Dave is still only penalized for the original
+`Dave · BTC = −3` deficit.
+
+> *"Initial deficits are commitments. Cascade fallout is plumbing.
+> Members pay for commitments they couldn't meet, not for the engine's
+> way of cleaning up."*
+
+---
+
+## 16. Numeric Precision
 
 Every quantity is held internally as a **scaled big-integer** with
-20 decimal digits of precision (i.e. the engine multiplies every input
-by 10²⁰ on the way in and divides on the way out). This avoids
+20 decimal digits of precision (the engine multiplies every input by
+10²⁰ on the way in and divides on the way out). This avoids
 floating-point rounding errors and lets the engine handle any asset's
 decimal places exactly.
 
 Two per-asset values control rounding:
 
 - **Precision** — how many decimal digits a quantity may carry. Inputs
-  are rounded *down* to this precision; reversals are rounded *up*, so a
-  reversal never under-undoes.
-- **Dust threshold** — the smallest amount worth moving. See [§7](#7-step-3--dust-threshold-rules).
+  are rounded *down* to this precision; reversals are rounded *up*, so
+  a reversal never under-undoes.
+- **DustThreshold** — the smallest amount worth moving. See
+  [§9](#9-step-3--dust-threshold-rules).
 
-### 13.1 Dust-aware reversal flow
+### 16.1 Dust-aware reversal flow
 
 ```mermaid
 flowchart TD
@@ -818,19 +1026,23 @@ strictly above its asset's dust threshold. No sub-dust residuals.
 
 ---
 
-## 14. Why This Design
+## 17. Why This Design
 
 | Property                  | What the design gives us                                                                 |
 |---------------------------|-------------------------------------------------------------------------------------------|
 | **Liquidity efficiency**  | Netting captures intra-window inflows, so members never deliver assets they don't truly need to. |
 | **Deterministic fairness**| LIFO unwinding + strict FIFO settlement produce identical output for identical input — no ordering ambiguity. |
-| **Operational isolation** | Independent batches mean a hold on one group's funds doesn't freeze the others. |
-| **Audit-grade arithmetic**| Scaled big-int math + explicit precision/dust rules mean the output is reproducible bit-for-bit. The validator (`cmd/validator`) re-checks the FIFO invariant and the net-flow reconciliation on every run. |
+| **Operational isolation** | Independent batches mean a hold on one group's funds doesn't freeze the others.           |
+| **Audit-grade arithmetic**| Scaled big-int math + explicit precision/dust rules mean the output is reproducible bit-for-bit. |
 | **Fair penalty**          | Members are penalized only for shortfalls they *caused*, never for fallout the engine's cleanup introduces. |
+
+The same algorithm scales unchanged to thousands of trades and dozens
+of assets. Precision and dust rules ensure no settlement leg is ever
+sub-dust; LIFO + strict FIFO give deterministic, fair settlement.
 
 ---
 
-## 15. Glossary
+## 18. Glossary
 
 | Term                  | Meaning                                                                       |
 |-----------------------|-------------------------------------------------------------------------------|
