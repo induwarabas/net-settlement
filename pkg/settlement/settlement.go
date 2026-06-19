@@ -8,6 +8,15 @@ package settlement
 
 import "github.com/shopspring/decimal"
 
+type StrictFifoMode int
+
+const StrictFifoMode_None = 0
+const StrictFifoMode_Member_Asset = 1
+const StrictFifoMode_Member_Instrument = 2
+const StrictFifoMode_Member_Asset_CounterParty = 3
+const StrictFifoMode_Member_Instrument_CounterParty = 4
+const StrictFifoMode_Member_Asset_CounterAsset_CounterParty = 5
+
 // Trade is the read-only view the engine needs of an executed trade.
 // ExecTime is reported in nanoseconds since the Unix epoch.
 type Trade interface {
@@ -119,7 +128,7 @@ type Asset interface {
 // All amounts are rounded to each asset's declared precision; sub-dust
 // residuals are eliminated by either fully reversing the trade or expanding
 // the reversal until both sides clear dust.
-func GenerateInstructions(trades []Trade, ledger []LedgerEntry, assets []Asset, strictFifo bool) Results {
+func GenerateInstructions(trades []Trade, ledger []LedgerEntry, assets []Asset, strictFifo StrictFifoMode) Results {
 	eng := newEngine(strictFifo)
 	eng.init(trades, ledger, assets)
 	return eng.run()

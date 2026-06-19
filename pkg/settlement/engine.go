@@ -8,8 +8,6 @@ import (
 	"os"
 	"sort"
 	"time"
-
-	"github.com/shopspring/decimal"
 )
 
 // trade is the engine's internal, scaled-integer representation of a Trade.
@@ -32,6 +30,8 @@ type trade struct {
 	QuoteDust         *big.Int
 	BasePrecision     int
 	QuotePrecision    int
+	BuyerFifoKey      string
+	SellerFifoKey     string
 }
 
 // assetLiability is the per-(member, asset) ordered list of trades that
@@ -74,12 +74,12 @@ type engine struct {
 	assetLiability    [][]*assetLiability
 	negativeLocations []*location
 	originalTrades    []Trade
-	strictFifo        bool
+	strictFifo        StrictFifoMode
 	penalties         []*Penalty
 }
 
 // newEngine creates an empty settlement engine. Call init before run.
-func newEngine(strictFifo bool) *engine {
+func newEngine(strictFifo StrictFifoMode) *engine {
 	m := &engine{
 		ledger:         make([][]*big.Int, 0),
 		netting:        make([][]*big.Int, 0),
@@ -152,7 +152,7 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		price := fromDecimal(trd.Price())
 		quoteQty := multiply(quantity, price) // roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
 
-		m.trades = append(m.trades, &trade{
+		t := &trade{
 			TradeId:           i,
 			Buyer:             m.memberId(trd.Buyer()),
 			Seller:            m.memberId(trd.Seller()),
@@ -167,7 +167,11 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 			QuoteDust:         quoteDust,
 			BasePrecision:     basePrecision,
 			QuotePrecision:    quotePrecision,
-		})
+		}
+		buyerFifoKey, sellerFifoKey := m.getFifoKeys(t)
+		t.BuyerFifoKey = buyerFifoKey
+		t.SellerFifoKey = sellerFifoKey
+		m.trades = append(m.trades, t)
 	}
 
 	m.ledger = make([][]*big.Int, len(m.memberIndex))
@@ -318,8 +322,8 @@ func (m *engine) runIteration(computePenalties bool) bool {
 			}
 		}
 	}
-	if m.strictFifo {
-		m.deferFollowingTradesIfNotFullySettledx()
+	if m.strictFifo != StrictFifoMode_None {
+		m.deferFollowingTradesIfNotFullySettled()
 	}
 
 	return true
@@ -577,69 +581,26 @@ func (m *engine) run() Results {
 	return batches
 }
 
-// deferFollowingTradesIfNotFullySettled enforces strict FIFO ordering on a
-// classified TradeResult slice: any trade that shares a member-asset pair with
-// an earlier non-fully-settled trade is force-deferred. The netting matrix is
-// rebuilt from the remaining settled trades so subsequent passes see the
-// correct balances. Loops until a pass produces no changes.
-//
-// This variant operates on the externally facing TradeResult slice. The
-// production path uses [engine.deferFollowingTradesIfNotFullySettledx], which
-// operates on the engine's internal trade structs and is called at the end of
-// each [engine.runIteration].
-func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
-	for {
-		for i := 0; i < len(m.memberIndex); i++ {
-			for j := 0; j < len(m.assetIndex); j++ {
-				m.netting[i][j] = new(big.Int).Set(m.ledger[i][j])
-			}
-		}
-
-		modified := false
-
-		deferred := make(map[string]bool)
-
-		for _, trd := range trades {
-			buyerKey := fmt.Sprintf("%s-%s", trd.Trade.Buyer(), trd.Trade.QuoteAsset())
-			sellerKey := fmt.Sprintf("%s-%s", trd.Trade.Seller(), trd.Trade.BaseAsset())
-			if deferred[buyerKey] || deferred[sellerKey] {
-				if trd.Status != TradeResultStatusDeferred {
-					modified = true
-				}
-				trd.Status = TradeResultStatusDeferred
-				trd.SettledQuoteQuantity = decimal.Zero
-				trd.SettledQuantity = decimal.Zero
-				trd.DeferredQuantity = trd.Trade.Quantity()
-				trd.DeferredQuoteQuantity = trd.Trade.Price().Mul(trd.Trade.Quantity())
-				deferred[buyerKey] = true
-				deferred[sellerKey] = true
-				continue
-			}
-			if trd.Status != TradeResultStatusFull {
-				deferred[buyerKey] = true
-				deferred[sellerKey] = true
-			}
-
-			if trd.Status == TradeResultStatusDeferred {
-				continue
-			}
-			buyerId := m.memberIndex[trd.Trade.Buyer()]
-			sellerId := m.memberIndex[trd.Trade.Seller()]
-			baseAssetId := m.assetIndex[trd.Trade.BaseAsset()]
-			quoteAssetId := m.assetIndex[trd.Trade.QuoteAsset()]
-			m.netting[buyerId][baseAssetId] = new(big.Int).Add(m.netting[buyerId][baseAssetId], fromDecimal(trd.SettledQuantity))
-			m.netting[sellerId][quoteAssetId] = new(big.Int).Add(m.netting[sellerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
-			m.netting[buyerId][quoteAssetId] = new(big.Int).Sub(m.netting[buyerId][quoteAssetId], fromDecimal(trd.SettledQuoteQuantity))
-			m.netting[sellerId][baseAssetId] = new(big.Int).Sub(m.netting[sellerId][baseAssetId], fromDecimal(trd.SettledQuantity))
-		}
-		if !modified {
-			break
-		}
+func (m *engine) getFifoKeys(trd *trade) (string, string) {
+	if m.strictFifo == StrictFifoMode_Member_Asset {
+		return fmt.Sprintf("%d-%d", trd.Buyer, trd.QuoteAsset), fmt.Sprintf("%d-%d", trd.Seller, trd.BaseAsset)
 	}
-
+	if m.strictFifo == StrictFifoMode_Member_Instrument {
+		return fmt.Sprintf("%d-%d-%d", trd.Buyer, trd.BaseAsset, trd.QuoteAsset), fmt.Sprintf("%d-%d-%d", trd.Seller, trd.BaseAsset, trd.QuoteAsset)
+	}
+	if m.strictFifo == StrictFifoMode_Member_Asset_CounterParty {
+		return fmt.Sprintf("%d-%d-%d", trd.Buyer, trd.QuoteAsset, trd.Seller), fmt.Sprintf("%d-%d-%d", trd.Seller, trd.BaseAsset, trd.Buyer)
+	}
+	if m.strictFifo == StrictFifoMode_Member_Instrument_CounterParty {
+		return fmt.Sprintf("%d-%d-%d-%d", trd.Buyer, trd.BaseAsset, trd.QuoteAsset, trd.Seller), fmt.Sprintf("%d-%d-%d-%d", trd.Seller, trd.BaseAsset, trd.QuoteAsset, trd.Buyer)
+	}
+	if m.strictFifo == StrictFifoMode_Member_Asset_CounterAsset_CounterParty {
+		return fmt.Sprintf("%d-%d-%d-%d", trd.Buyer, trd.QuoteAsset, trd.BaseAsset, trd.Seller), fmt.Sprintf("%d-%d-%d-%d", trd.Seller, trd.BaseAsset, trd.QuoteAsset, trd.Buyer)
+	}
+	return "", ""
 }
 
-// deferFollowingTradesIfNotFullySettledx enforces strict FIFO ordering on the
+// deferFollowingTradesIfNotFullySettled enforces strict FIFO ordering on the
 // engine's internal trade structs. Walking trades in execution-time order, any
 // trade that shares a buyer-quote or seller-base position with an earlier
 // non-fully-settled trade is fully reversed via reverseTrade (which updates
@@ -647,15 +608,15 @@ func (m *engine) deferFollowingTradesIfNotFullySettled(trades []*TradeResult) {
 //
 // Called at the end of every [engine.runIteration]; the outer convergence loop
 // re-runs until no negatives remain.
-func (m *engine) deferFollowingTradesIfNotFullySettledx() {
+func (m *engine) deferFollowingTradesIfNotFullySettled() {
 	for {
 		modified := false
 
 		deferred := make(map[string]bool)
 
 		for _, trd := range m.trades {
-			buyerKey := fmt.Sprintf("%d-%d", trd.Buyer, trd.QuoteAsset)
-			sellerKey := fmt.Sprintf("%d-%d", trd.Seller, trd.BaseAsset)
+			buyerKey := trd.BuyerFifoKey
+			sellerKey := trd.SellerFifoKey
 			revertQty := new(big.Int).Set(trd.RemainingBaseQty)
 			if deferred[buyerKey] || deferred[sellerKey] {
 				deferred[buyerKey] = true
