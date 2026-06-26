@@ -63,7 +63,7 @@ func main() {
 		asts[i] = wrappers.NewAssetWrapper(asset)
 	}
 
-	instructions := settlement.GenerateInstructions(trds, leds, asts, settlement.StrictFifoMode_Member_Asset_CounterAsset_CounterParty)
+	instructions := settlement.GenerateInstructions(trds, leds, asts, settlement.StrictFifoMode_Member_Instrument_CounterParty)
 
 	output.WriteInstructions(filepath.Join(outDir, "settlement-instructions.csv"), instructions)
 	output.WriteTradeDetail(filepath.Join(outDir, "trade-settlements.csv"), instructions)

@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/big"
 	"os"
 	"sort"
@@ -32,6 +33,7 @@ type trade struct {
 	QuotePrecision    int
 	BuyerFifoKey      string
 	SellerFifoKey     string
+	CycleFactor       int64
 }
 
 // assetLiability is the per-(member, asset) ordered list of trades that
@@ -58,6 +60,12 @@ func newLocation(member int, asset int) *location {
 	}
 }
 
+type counts struct {
+	full     int
+	partial  int
+	deferred int
+}
+
 // engine holds the mutable working state for a single settlement run: interned
 // member/asset IDs, the ledger and netting matrices, the per-position trade
 // liability lists, and the original trade objects (kept so TradeResults can
@@ -76,6 +84,11 @@ type engine struct {
 	originalTrades    []Trade
 	strictFifo        StrictFifoMode
 	penalties         []*Penalty
+	iteration         int
+	cycleKey          string
+	cycleIdx          int
+	cycleTrades       map[int]int
+	counts            *counts
 }
 
 // newEngine creates an empty settlement engine. Call init before run.
@@ -90,6 +103,8 @@ func newEngine(strictFifo StrictFifoMode) *engine {
 		originalTrades: make([]Trade, 0),
 		strictFifo:     strictFifo,
 		penalties:      make([]*Penalty, 0),
+		cycleTrades:    make(map[int]int),
+		counts:         &counts{},
 	}
 	return m
 }
@@ -148,9 +163,9 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		baseDust := fromDecimal(baseAsset.DustThreshold())
 		quoteDust := fromDecimal(quoteAsset.DustThreshold())
 
-		quantity := fromDecimal(trd.Quantity()) // roundToPrecision(fromDecimal(trd.Quantity()), basePrecision, roundDown)
+		quantity := roundToPrecision(fromDecimal(trd.Quantity()), basePrecision, roundDown)
 		price := fromDecimal(trd.Price())
-		quoteQty := multiply(quantity, price) // roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
+		quoteQty := roundToPrecision(multiply(quantity, price), quotePrecision, roundDown)
 
 		t := &trade{
 			TradeId:           i,
@@ -199,7 +214,7 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 		if ast == nil {
 			return fmt.Errorf("asset reference data missing for ledger asset: %s", entry.Asset())
 		}
-		balance := fromDecimal(entry.Balance()) // roundToPrecision(fromDecimal(entry.Balance()), ast.Precision(), roundDown)
+		balance := roundToPrecision(fromDecimal(entry.Balance()), ast.Precision(), roundDown)
 		m.ledger[memberId][assetId].Set(balance)
 		m.netting[memberId][assetId].Set(balance)
 	}
@@ -212,7 +227,7 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 	for asset, id := range m.assetIndex {
 		ast := assetMap[asset]
 		if ast == nil {
-			fmt.Println("Asset reference data missing: ", asset, " (", id, ")")
+			slog.Error("Asset reference data missing: ", asset, " (", id, ")")
 			return fmt.Errorf("asset reference data missing for asset: %s", asset)
 		}
 		m.assets[id] = ast
@@ -240,6 +255,9 @@ func (m *engine) init(trades []Trade, ledger []LedgerEntry, assets []Asset) erro
 			liability.Start = len(liability.Trades) - 1
 		}
 	}
+
+	m.counts.full = len(m.trades)
+
 	slog.Info("Settlement engine initialized.", "trades", len(m.trades), "members", len(m.members), "assets", len(m.assets))
 	return nil
 }
@@ -275,6 +293,8 @@ func (m *engine) runIteration(computePenalties bool) bool {
 		return false
 	}
 
+	affectedTrades := make([]*trade, 0)
+
 	for _, loc := range m.negativeLocations {
 		remaining := new(big.Int).Neg(m.netting[loc.member][loc.asset])
 		if computePenalties {
@@ -290,14 +310,19 @@ func (m *engine) runIteration(computePenalties bool) bool {
 			}
 
 			liability := m.assetLiability[loc.member][loc.asset]
-			if liability.Start < 0 {
-				fmt.Println("Can't be")
-			}
+
 			trd := liability.Trades[liability.Start]
 			if trd.RemainingBaseQty.Sign() == 0 {
 				liability.Start -= 1
 				continue
 			}
+
+			if trd.Buyer == trd.Seller {
+				liability.Start -= 1
+				continue
+			}
+
+			affectedTrades = append(affectedTrades, trd)
 
 			if trd.BaseAsset == loc.asset {
 				if remaining.Cmp(trd.RemainingBaseQty) > 0 {
@@ -325,6 +350,10 @@ func (m *engine) runIteration(computePenalties bool) bool {
 	if m.strictFifo != StrictFifoMode_None {
 		m.deferFollowingTradesIfNotFullySettled()
 	}
+	if detected, idx := m.detectCycle(affectedTrades); detected {
+		slog.Debug("cycle detected")
+		m.breakCycle(idx)
+	}
 
 	return true
 }
@@ -340,6 +369,9 @@ func (m *engine) runIteration(computePenalties bool) bool {
 // sub-dust, the reversal is expanded until both deferred sides clear dust (or
 // to a full reversal if expansion would overrun what's left).
 func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
+	if trade.Buyer == trade.Seller {
+		return
+	}
 	if trade.BaseQuantity.Sign() == 0 || trade.QuoteQuantity.Sign() == 0 {
 		return
 	}
@@ -351,8 +383,8 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 
 	// Round each side up to its asset's precision so the reversal cannot leave
 	// fractional digits beyond what the asset supports.
-	baseQty = baseQty   // roundToPrecision(baseQty, m.assets[trade.BaseAsset].Precision(), roundUp)
-	quoteQty = quoteQty // roundToPrecision(quoteQty, m.assets[trade.QuoteAsset].Precision(), roundUp)
+	baseQty = roundToPrecision(baseQty, m.assets[trade.BaseAsset].Precision(), roundUp)
+	quoteQty = roundToPrecision(quoteQty, m.assets[trade.QuoteAsset].Precision(), roundUp)
 
 	// Guard against the non-driving side rounding away to zero: a zero result
 	// would not decrement the corresponding RemainingQty, breaking classification
@@ -374,6 +406,12 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 		quoteQty = new(big.Int).Set(trade.RemainingQuoteQty)
 	}
 
+	if trade.RemainingBaseQty.Cmp(baseQty) == 0 {
+		m.counts.full--
+	} else {
+		m.counts.partial--
+	}
+
 	trade.RemainingBaseQty.Sub(trade.RemainingBaseQty, baseQty)
 	trade.RemainingQuoteQty.Sub(trade.RemainingQuoteQty, quoteQty)
 
@@ -381,6 +419,14 @@ func (m *engine) reverseTrade(trade *trade, qty *big.Int, base bool) {
 	m.netting[trade.Seller][trade.BaseAsset].Add(m.netting[trade.Seller][trade.BaseAsset], baseQty)
 	m.netting[trade.Buyer][trade.QuoteAsset].Add(m.netting[trade.Buyer][trade.QuoteAsset], quoteQty)
 	m.netting[trade.Seller][trade.QuoteAsset].Sub(m.netting[trade.Seller][trade.QuoteAsset], quoteQty)
+
+	if trade.RemainingBaseQty.Sign() == 0 {
+		m.counts.deferred++
+		trade.CycleFactor = new(big.Int).SetInt64(0).Int64()
+	} else {
+		m.counts.partial++
+		trade.CycleFactor = new(big.Int).Div(trade.RemainingBaseQty, baseQty).Int64()
+	}
 }
 
 // derivePair returns the (baseQty, quoteQty) reversal pair for the given driver
@@ -441,15 +487,15 @@ func (m *engine) applyDustRules(trade *trade, baseQty, quoteQty *big.Int) (*big.
 		// Pick whichever side requires the larger proportional reversal.
 		quoteImpliedByBase := multiplyAndDivide(needBase, trade.QuoteQuantity, trade.BaseQuantity)
 		if quoteImpliedByBase.Cmp(needQuote) >= 0 {
-			baseQty = needBase                                                             //roundToPrecision(needBase, trade.BasePrecision, roundUp)
-			quoteQty = multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity) //roundToPrecision(
-			// multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity),
-			// trade.QuotePrecision, roundUp)
+			baseQty = roundToPrecision(needBase, trade.BasePrecision, roundUp)
+			quoteQty = roundToPrecision(
+				multiplyAndDivide(baseQty, trade.QuoteQuantity, trade.BaseQuantity),
+				trade.QuotePrecision, roundUp)
 		} else {
-			quoteQty = needQuote                                                           //roundToPrecision(needQuote, trade.QuotePrecision, roundUp)
-			baseQty = multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity) //roundToPrecision(
-			//multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity),
-			//trade.BasePrecision, roundUp)
+			quoteQty = roundToPrecision(needQuote, trade.QuotePrecision, roundUp)
+			baseQty = roundToPrecision(
+				multiplyAndDivide(quoteQty, trade.BaseQuantity, trade.QuoteQuantity),
+				trade.BasePrecision, roundUp)
 		}
 		if baseQty.Sign() == 0 {
 			baseQty = precisionStep(trade.BasePrecision)
@@ -477,8 +523,30 @@ func (m *engine) run() Results {
 	// m.printNettingTable(0)
 	i := 1
 	for {
-		ok := m.runIteration(i == 1)
+		m.iteration = i
+		//if i%10 == 0 {
+		//	full := 0
+		//	partial := 0
+		//	defered := 0
+		//	for _, t := range m.trades {
+		//		if t.RemainingBaseQty.Sign() == 0 {
+		//			defered += 1
+		//		} else if t.RemainingBaseQty.Cmp(t.BaseQuantity) == 0 {
+		//			full += 1
+		//		} else {
+		//			partial += 1
+		//		}
+		//	}
+		//	// fmt.Printf("Run iteration %d, full=%d, partial=%d, defer=%d\n", i, full, partial, defered)
+		//}
+		//if i == 1000 {
+		//	fmt.Println("1000")
+		//}
+		//if i >= 1000 && i < 1010 {
+		//	m.printNettingTable(i)
+		//}
 		// m.printNettingTable(i)
+		ok := m.runIteration(i == 1)
 		i += 1
 		if !ok {
 			break
@@ -679,4 +747,56 @@ func (m *engine) printNettingTable(index int) error {
 	}
 
 	return w.Error()
+}
+
+func (m *engine) detectCycle(trades []*trade) (bool, int) {
+	for _, t := range trades {
+		if t.RemainingBaseQty.Sign() == 0 {
+			m.cycleKey = ""
+			m.cycleIdx = 0
+			return false, 0
+		}
+	}
+	cycleKey := fmt.Sprintf("%d-%d-%d", m.counts.full, m.counts.partial, m.counts.deferred)
+	if m.cycleKey != cycleKey {
+		m.cycleKey = cycleKey
+		m.cycleIdx = 0
+		clear(m.cycleTrades)
+		return false, 0
+	}
+	detected := false
+	detectedIdx := 0
+	for _, t := range trades {
+		if idx, ok := m.cycleTrades[t.TradeId]; ok {
+			detected = true
+			detectedIdx = idx
+		}
+		m.cycleTrades[t.TradeId] = m.cycleIdx
+	}
+	if detected {
+		return true, detectedIdx
+	}
+	m.cycleIdx++
+	return false, 0
+}
+
+func (m *engine) breakCycle(idx int) {
+	var minFactor int64 = math.MaxInt64
+	minKey := 0
+	for k, i := range m.cycleTrades {
+		if i < idx {
+			continue
+		}
+		t := m.trades[k]
+		if t.CycleFactor < minFactor {
+			minFactor = t.CycleFactor
+			minKey = k
+		}
+	}
+
+	trd := m.trades[minKey]
+	m.reverseTrade(trd, trd.RemainingBaseQty, true)
+	slog.Info("cycle broken using trade", "tradeId", trd.TradeId)
+	m.cycleKey = ""
+	clear(m.cycleTrades)
 }
